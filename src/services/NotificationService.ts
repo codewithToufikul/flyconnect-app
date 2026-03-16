@@ -1,24 +1,45 @@
 import messaging from '@react-native-firebase/messaging';
-import {Alert, Platform, PermissionsAndroid} from 'react-native';
+import {Platform, PermissionsAndroid} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import notifee, {
+  AndroidImportance,
+  AndroidVisibility,
+  EventType,
+} from '@notifee/react-native';
 import api from './api';
 
 const FCM_TOKEN_KEY = '@fcm_token';
+const CHAT_CHANNEL_ID = 'chat_messages';
+
+async function ensureAndroidChannel() {
+  if (Platform.OS !== 'android') return;
+  try {
+    await notifee.createChannel({
+      id: CHAT_CHANNEL_ID,
+      name: 'Chat Messages',
+      importance: AndroidImportance.HIGH,
+      visibility: AndroidVisibility.PUBLIC,
+      sound: 'default',
+      vibration: true,
+    });
+    console.log('✅ [NotificationService] Android notification channel ensured.');
+  } catch (e) {
+    console.error('❌ [NotificationService] Failed to create channel:', e);
+  }
+}
 
 class NotificationService {
+  /**
+   * Request permissions (Modular API)
+   */
   async requestUserPermission() {
     console.log('Firebase: Requesting user permission...');
 
-    // For Android 13+, we need to request POST_NOTIFICATIONS explicitly
     if (Platform.OS === 'android' && Platform.Version >= 33) {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-        );
-        console.log('Firebase: Android 13+ Notification Permission:', granted);
-      } catch (err) {
-        console.warn('Firebase: Error requesting Android 13 permission:', err);
-      }
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+      );
+      console.log('Firebase: Android 13+ Notification Permission:', granted);
     }
 
     const authStatus = await messaging().requestPermission();
@@ -28,56 +49,32 @@ class NotificationService {
 
     if (enabled) {
       console.log('Firebase: Permission granted. Status:', authStatus);
-      const token = await this.getFcmToken();
-      if (token) {
-        console.log('Firebase: FCM initialized successfully. Token acquired.');
-      }
-    } else {
-      console.log('Firebase: Permission denied or not determined.');
+      await this.getFcmToken();
     }
   }
 
+  /**
+   * Get and Sync Token (Force Sync to fix "0 Tokens" issue)
+   */
   async getFcmToken() {
     try {
       if (Platform.OS === 'ios') {
         await messaging().registerDeviceForRemoteMessages();
       }
 
-      let fcmToken = await AsyncStorage.getItem(FCM_TOKEN_KEY);
-
-      // Always get fresh token from firebase
-      let freshToken;
-      try {
-        freshToken = await messaging().getToken();
-        console.log(
-          'Firebase: Retrieved raw FCM Token:',
-          freshToken ? '✅' : '❌',
-        );
-      } catch (e: any) {
-        if (Platform.OS === 'ios' && e.message?.includes('APNS token')) {
-          console.log('Firebase: APNS token not ready, retrying...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          freshToken = await messaging().getToken();
-        } else {
-          throw e;
-        }
-      }
-
-      if (freshToken && freshToken !== fcmToken) {
-        console.log('Firebase: New Token detected. Updating backend...');
+      // Modular API: getToken()
+      const freshToken = await messaging().getToken();
+      
+      if (freshToken) {
+        console.log('Firebase: Syncing FCM Token with backend (Force Sync)...');
         await AsyncStorage.setItem(FCM_TOKEN_KEY, freshToken);
         await this.registerTokenWithBackend(freshToken);
-      } else if (freshToken) {
-        console.log('Firebase: Connection stable. Token matches storage.');
-      }
-
-      return freshToken;
-    } catch (error: any) {
-      if (Platform.OS === 'ios' && error.message?.includes('APNS token')) {
-        console.warn('Firebase: APNS not available (Simulator).');
+        return freshToken;
       } else {
-        console.error('Firebase: Token Error:', error);
+        console.warn('Firebase: No fresh token retrieved.');
       }
+    } catch (error: any) {
+      console.error('Firebase: Token Error:', error);
     }
   }
 
@@ -90,43 +87,70 @@ class NotificationService {
     }
   }
 
-  // Handle foreground messages
-  listenForForegroundMessages() {
-    return messaging().onMessage(async remoteMessage => {
-      console.log(
-        'Firebase: New Foreground Message:',
-        remoteMessage.notification?.title,
-      );
-      Alert.alert(
-        remoteMessage.notification?.title || 'New Notification',
-        remoteMessage.notification?.body || '',
-      );
-    });
+  /**
+   * Display Foreground Banner
+   */
+  private async displayForegroundNotification(remoteMessage: any) {
+    console.log('📱 [NotificationService] Received Foreground FCM:', remoteMessage.messageId);
+    
+    await ensureAndroidChannel();
+
+    const title = remoteMessage.data?.senderName || remoteMessage.notification?.title || 'New Message';
+    const body = remoteMessage.data?.content || remoteMessage.notification?.body || '';
+
+    try {
+      await notifee.displayNotification({
+        id: remoteMessage.messageId, // Use FCM messageId as Notifee ID to avoid duplicates
+        title,
+        body,
+        data: remoteMessage.data || {},
+        android: {
+          channelId: CHAT_CHANNEL_ID,
+          importance: AndroidImportance.HIGH,
+          pressAction: {id: 'default'},
+          smallIcon: 'ic_launcher',
+          color: '#6366F1',
+        },
+        ios: {
+          foregroundPresentationOptions: {
+            badge: true,
+            sound: true,
+            banner: true,
+            list: true,
+          },
+        },
+      });
+      console.log('✅ [NotificationService] Banner shown.');
+    } catch (e) {
+      console.error('❌ [NotificationService] Banner error:', e);
+    }
   }
 
-  // Handle background/quit state messages
-  listenForBackgroundMessages() {
-    messaging().setBackgroundMessageHandler(async remoteMessage => {
-      console.log('Background message received:', remoteMessage);
+  listenForForegroundMessages() {
+    console.log('👂 [NotificationService] Listening for foreground messages...');
+    return messaging().onMessage(async remoteMessage => {
+      await this.displayForegroundNotification(remoteMessage);
     });
   }
 
   async initialize() {
-    console.log('Firebase: Starting messaging service initialization...');
+    await ensureAndroidChannel();
     this.listenForForegroundMessages();
 
+    // Check permission status
     const authStatus = await messaging().hasPermission();
-    if (
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL
-    ) {
-      console.log('Firebase: App has existing permissions. Fetching token...');
-      this.getFcmToken();
-    } else {
-      console.log(
-        'Firebase: No notification permissions found. Awaiting user action.',
-      );
+    if (authStatus === messaging.AuthorizationStatus.AUTHORIZED) {
+      await this.getFcmToken();
     }
+    
+    // Listen for notifee events (like tapping a banner while app is open)
+    notifee.onForegroundEvent(({ type, detail }) => {
+      if (type === EventType.PRESS) {
+        console.log('🖱️ [NotificationService] Foreground banner pressed');
+        // Navigation is handled in App.tsx via onNotificationOpenedApp 
+        // which triggers even for foreground notifee presses if configured.
+      }
+    });
   }
 }
 

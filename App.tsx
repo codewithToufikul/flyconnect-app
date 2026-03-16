@@ -1,31 +1,108 @@
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { StatusBar, LogBox } from 'react-native';
+import React, {useEffect, useRef} from 'react';
+import {NavigationContainer, NavigationContainerRef} from '@react-navigation/native';
+import {StatusBar, LogBox} from 'react-native';
 import AppNavigator from './src/navigation/AppNavigator';
-import { ProfileProvider } from './src/context/ProfileContext';
-import { SocketProvider } from './src/context/SocketContext';
+import {ProfileProvider} from './src/context/ProfileContext';
+import {SocketProvider} from './src/context/SocketContext';
 import NotificationService from './src/services/NotificationService';
 import messaging from '@react-native-firebase/messaging';
 import NotificationPermissionModal from './src/components/NotificationPermissionModal';
+import {get} from './src/services/api';
 
-// Register background handler
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTANT: Background handler MUST be registered outside of any component
+// ─────────────────────────────────────────────────────────────────────────────
 messaging().setBackgroundMessageHandler(async remoteMessage => {
-  console.log('Message handled in the background!', remoteMessage);
+  console.log('📨 Background FCM message received:', remoteMessage.data);
 });
 
-// Ignore specific third-party library warnings for a cleaner console
 LogBox.ignoreLogs(['Warning: CountryModal: Support for defaultProps']);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: build the user object from notification data and navigate to chat
+// ─────────────────────────────────────────────────────────────────────────────
+async function navigateToChat(
+  navigationRef: NavigationContainerRef<any>,
+  data: Record<string, string> | undefined,
+) {
+  if (!data?.senderId) return;
+  try {
+    // Fetch the sender's profile to pass to ChatScreen
+    const response = await get<any>(`/api/v1/users/${data.senderId}`);
+    const senderUser = response?.user ?? {
+      _id: data.senderId,
+      name: data.senderName || 'User',
+      profileImage: data.senderImage || null,
+    };
+    navigationRef.navigate('ChatScreen', {user: senderUser});
+  } catch {
+    // Fallback: navigate with minimal data from notification payload
+    navigationRef.navigate('ChatScreen', {
+      user: {
+        _id: data.senderId,
+        name: data.senderName || 'User',
+        profileImage: data.senderImage || null,
+      },
+    });
+  }
+}
+
 const App = () => {
-  React.useEffect(() => {
+  const navigationRef = useRef<NavigationContainerRef<any>>(null);
+
+  useEffect(() => {
+    // Initialize FCM token registration + foreground listener
     NotificationService.initialize();
+
+    // ── Foreground tap listener (app is OPEN and user taps notification) ──
+    // Note: foreground messages are handled inside NotificationService.
+    // This listener handles taps on notifications shown by the OS when app is open.
+
+    // ── Background tap listener (app is in BACKGROUND, user taps notification) ──
+    const unsubscribeBackground = messaging().onNotificationOpenedApp(
+      remoteMessage => {
+        console.log(
+          '📲 Notification tapped (background):',
+          remoteMessage.data,
+        );
+        if (navigationRef.current?.isReady()) {
+          navigateToChat(navigationRef.current, remoteMessage.data as Record<string, string>);
+        }
+      },
+    );
+
+    // ── Quit state (app was fully closed, user taps notification to open) ──
+    messaging()
+      .getInitialNotification()
+      .then(remoteMessage => {
+        if (remoteMessage) {
+          console.log(
+            '📲 Notification tapped (quit state):',
+            remoteMessage.data,
+          );
+          // Small delay to let Navigation mount first
+          setTimeout(() => {
+            if (navigationRef.current?.isReady()) {
+              navigateToChat(navigationRef.current, remoteMessage.data as Record<string, string>);
+            }
+          }, 1000);
+        }
+      });
+
+    return () => {
+      unsubscribeBackground();
+    };
   }, []);
 
   return (
     <ProfileProvider>
       <SocketProvider>
-        <NavigationContainer>
-          <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
+        <NavigationContainer ref={navigationRef}>
+          <StatusBar
+            barStyle="dark-content"
+            translucent
+            backgroundColor="transparent"
+          />
           <NotificationPermissionModal />
           <AppNavigator />
         </NavigationContainer>

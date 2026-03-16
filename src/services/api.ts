@@ -16,7 +16,7 @@ const PRODUCTION_URL = 'https://your-production-url.com';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://10.205.18.191:10000', // Machine's local IP for physical devices and emulators
+  android: 'http://10.182.169.191:10000', // Updated local IP address
   ios: 'http://localhost:10000',
   default: 'http://localhost:10000',
 });
