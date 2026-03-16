@@ -72,3 +72,12 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Secrets
+.env
+.env.local
+android/app/google-services.json
+ios/GoogleService-Info.plist
+ios/FlyConnect/GoogleService-Info.plist
+*.keystore
+!debug.keystore
