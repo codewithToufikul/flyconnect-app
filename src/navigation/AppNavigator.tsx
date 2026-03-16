@@ -14,6 +14,8 @@ import ProfileStack from './stacks/ProfileStack';
 import CallsStack from './stacks/CallsStack';
 import SearchStack from './stacks/SearchStack';
 import ChatScreen from '../screens/Main/ChatScreen';
+import IncomingCallScreen from '../screens/Calls/IncomingCallScreen';
+import ActiveCallScreen from '../screens/Calls/ActiveCallScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -94,6 +96,16 @@ const AppNavigator = () => {
                 name="ChatScreen"
                 component={ChatScreen}
                 options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="IncomingCall"
+                component={IncomingCallScreen}
+                options={{ headerShown: false, gestureEnabled: false }}
+            />
+            <Stack.Screen
+                name="ActiveCall"
+                component={ActiveCallScreen}
+                options={{ headerShown: false, gestureEnabled: false }}
             />
         </Stack.Navigator>
     );

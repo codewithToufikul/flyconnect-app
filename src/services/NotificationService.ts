@@ -5,15 +5,18 @@ import notifee, {
   AndroidImportance,
   AndroidVisibility,
   EventType,
+  AndroidCategory,
 } from '@notifee/react-native';
 import api from './api';
 
 const FCM_TOKEN_KEY = '@fcm_token';
 const CHAT_CHANNEL_ID = 'chat_messages';
+const CALL_CHANNEL_ID = 'calls';
 
-async function ensureAndroidChannel() {
+async function ensureAndroidChannels() {
   if (Platform.OS !== 'android') return;
   try {
+    // Chat Channel
     await notifee.createChannel({
       id: CHAT_CHANNEL_ID,
       name: 'Chat Messages',
@@ -22,9 +25,21 @@ async function ensureAndroidChannel() {
       sound: 'default',
       vibration: true,
     });
-    console.log('✅ [NotificationService] Android notification channel ensured.');
+
+    // Calls Channel
+    await notifee.createChannel({
+      id: CALL_CHANNEL_ID,
+      name: 'Calls',
+      importance: AndroidImportance.HIGH,
+      visibility: AndroidVisibility.PUBLIC,
+      sound: 'default', // Ideally use 'ringtone' or custom mp3
+      vibration: true,
+      lightColor: '#ff0000',
+    });
+
+    console.log('✅ [NotificationService] Android notification channels ensured.');
   } catch (e) {
-    console.error('❌ [NotificationService] Failed to create channel:', e);
+    console.error('❌ [NotificationService] Failed to create channels:', e);
   }
 }
 
@@ -93,23 +108,24 @@ class NotificationService {
   private async displayForegroundNotification(remoteMessage: any) {
     console.log('📱 [NotificationService] Received Foreground FCM:', remoteMessage.messageId);
     
-    await ensureAndroidChannel();
-
     const title = remoteMessage.data?.senderName || remoteMessage.notification?.title || 'New Message';
     const body = remoteMessage.data?.content || remoteMessage.notification?.body || '';
+    const isCall = remoteMessage.data?.type === 'CALL_INCOMING';
 
     try {
       await notifee.displayNotification({
-        id: remoteMessage.messageId, // Use FCM messageId as Notifee ID to avoid duplicates
+        id: remoteMessage.messageId, 
         title,
         body,
         data: remoteMessage.data || {},
         android: {
-          channelId: CHAT_CHANNEL_ID,
+          channelId: isCall ? CALL_CHANNEL_ID : CHAT_CHANNEL_ID,
           importance: AndroidImportance.HIGH,
           pressAction: {id: 'default'},
           smallIcon: 'ic_launcher',
-          color: '#6366F1',
+          color: isCall ? '#EF4444' : '#6366F1',
+          fullScreenAction: isCall ? { id: 'default' } : undefined, // Wake up screen for calls
+          category: isCall ? AndroidCategory.CALL : AndroidCategory.MESSAGE,
         },
         ios: {
           foregroundPresentationOptions: {
@@ -120,7 +136,7 @@ class NotificationService {
           },
         },
       });
-      console.log('✅ [NotificationService] Banner shown.');
+      console.log(`✅ [NotificationService] ${isCall ? 'Call alert' : 'Banner'} shown.`);
     } catch (e) {
       console.error('❌ [NotificationService] Banner error:', e);
     }
@@ -134,12 +150,12 @@ class NotificationService {
   }
 
   async initialize() {
-    await ensureAndroidChannel();
+    await ensureAndroidChannels();
     this.listenForForegroundMessages();
 
     // Check permission status
     const authStatus = await messaging().hasPermission();
-    if (authStatus === messaging.AuthorizationStatus.AUTHORIZED) {
+    if (authStatus === (messaging.AuthorizationStatus.AUTHORIZED as any)) {
       await this.getFcmToken();
     }
     

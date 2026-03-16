@@ -4,6 +4,7 @@ import {StatusBar, LogBox} from 'react-native';
 import AppNavigator from './src/navigation/AppNavigator';
 import {ProfileProvider} from './src/context/ProfileContext';
 import {SocketProvider} from './src/context/SocketContext';
+import {CallProvider} from './src/context/CallContext';
 import NotificationService from './src/services/NotificationService';
 import messaging from '@react-native-firebase/messaging';
 import NotificationPermissionModal from './src/components/NotificationPermissionModal';
@@ -26,6 +27,16 @@ async function navigateToChat(
   data: Record<string, string> | undefined,
 ) {
   if (!data?.senderId) return;
+
+  // Handle Call Notifications first
+  if (data.type === 'CALL_INCOMING') {
+    navigationRef.navigate('IncomingCall', {
+      callId: data.callId,
+      channelName: data.channelName,
+    });
+    return;
+  }
+
   try {
     // Fetch the sender's profile to pass to ChatScreen
     const response = await get<any>(`/api/v1/users/${data.senderId}`);
@@ -47,8 +58,9 @@ async function navigateToChat(
   }
 }
 
+import {navigationRef} from './src/navigation/RootNavigation';
+
 const App = () => {
-  const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
   useEffect(() => {
     // Initialize FCM token registration + foreground listener
@@ -97,15 +109,17 @@ const App = () => {
   return (
     <ProfileProvider>
       <SocketProvider>
-        <NavigationContainer ref={navigationRef}>
-          <StatusBar
-            barStyle="dark-content"
-            translucent
-            backgroundColor="transparent"
-          />
-          <NotificationPermissionModal />
-          <AppNavigator />
-        </NavigationContainer>
+        <CallProvider>
+          <NavigationContainer ref={navigationRef}>
+            <StatusBar
+              barStyle="dark-content"
+              translucent
+              backgroundColor="transparent"
+            />
+            <NotificationPermissionModal />
+            <AppNavigator />
+          </NavigationContainer>
+        </CallProvider>
       </SocketProvider>
     </ProfileProvider>
   );

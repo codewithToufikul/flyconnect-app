@@ -30,6 +30,7 @@ import { useProfile } from '../../context/ProfileContext';
 import StorageService from '../../services/StorageService';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MediaService, { PickedMedia } from '../../services/MediaService';
+import { useCall } from '../../context/CallContext';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -91,6 +92,7 @@ const EMOJIS = ['❤️', '😂', '😮', '😢', '😡', '👍', '🙌'];
 const ChatScreen = ({ route, navigation }: any) => {
     const { user: otherUser } = route.params;
     const { user: currentUser } = useProfile();
+    const { initiateCall } = useCall();
 
     const [messages, setMessages] = useState<any[]>([]);
     const [conversationId, setConversationId] = useState<string | null>(null);
@@ -1406,10 +1408,16 @@ const ChatScreen = ({ route, navigation }: any) => {
                     </View>
                 </TouchableOpacity>
                 <View style={styles.headerActions}>
-                    <TouchableOpacity style={styles.iconButton}>
+                    <TouchableOpacity 
+                        style={styles.iconButton}
+                        onPress={() => initiateCall(otherUserId, 'audio')}
+                    >
                         <Icon name="call-outline" size={24} color="#6366F1" />
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.iconButton}>
+                    <TouchableOpacity 
+                        style={styles.iconButton}
+                        onPress={() => initiateCall(otherUserId, 'video')}
+                    >
                         <Icon name="videocam-outline" size={24} color="#6366F1" />
                     </TouchableOpacity>
                 </View>
