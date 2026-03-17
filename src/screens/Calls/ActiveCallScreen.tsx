@@ -33,32 +33,35 @@ import api from '../../services/api';
 
 const { width, height } = Dimensions.get('window');
 
-// Helper to convert string ID to numeric UID for Agora
 const getNumericUid = (id: string): number => {
   if (!id) return 0;
   // If it's already a numeric string, just parse it
   if (/^\d+$/.test(id)) return parseInt(id, 10);
-  
+
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
     const char = id.charCodeAt(i);
     hash = (hash << 5) - hash + char;
-    hash |= 0; 
+    hash |= 0;
   }
   return Math.abs(hash);
 };
 
+const RINGBACK_URL = 'https://www.soundjay.com/phone_c2026/sounds/phone-calling-1b.mp3'; // Professional ringback tone URL
+const RINGBACK_ID = 1;
+
 const ActiveCallScreen = () => {
   const { callSession, endCall } = useCall();
   const { user } = useProfile();
-  
+
   const [token, setToken] = useState<string | null>(null);
   const [appId, setAppId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  
+
   // Agora State
   const engine = useRef<IRtcEngine | null>(null);
   const hasExited = useRef(false);
+  const isRingbackPlaying = useRef(false);
   const [isJoined, setIsJoined] = useState(false);
   const [isEngineReady, setIsEngineReady] = useState(false);
   const [remoteUid, setRemoteUid] = useState<number | null>(null);
@@ -70,11 +73,11 @@ const ActiveCallScreen = () => {
 
   // Ensure we use the correct ID property
   const userId = user?.id || (user as any)?._id || (user as any)?.uid || '';
-  
+
   // Identify who the "other" person is
   const isCaller = callSession?.caller.id === userId;
   const otherPerson = isCaller ? callSession?.receiver : callSession?.caller;
-  
+
   const localUid = getNumericUid(userId);
 
   // 1. Timer Logic
@@ -97,6 +100,30 @@ const ActiveCallScreen = () => {
     return `${hrs > 0 ? hrs + ':' : ''}${mins < 10 && hrs > 0 ? '0' + mins : mins}:${secs < 10 ? '0' + secs : secs}`;
   };
 
+  const playRingback = useCallback(() => {
+    if (engine.current && !isRingbackPlaying.current && callSession?.status === 'OUTGOING') {
+      console.log('🎵 [Agora] Starting Ringback Tone...');
+      engine.current.playEffect(
+        RINGBACK_ID,
+        RINGBACK_URL,
+        -1, // Loop indefinitely
+        1,  // Pitch
+        0,  // Pan
+        60, // Volume (0-100)
+        true // Publish to remote
+      );
+      isRingbackPlaying.current = true;
+    }
+  }, [callSession?.status]);
+
+  const stopRingback = useCallback(() => {
+    if (engine.current && isRingbackPlaying.current) {
+      console.log('🔇 [Agora] Stopping Ringback Tone');
+      engine.current.stopEffect(RINGBACK_ID);
+      isRingbackPlaying.current = false;
+    }
+  }, []);
+
   // 2. Fetch Token
   useEffect(() => {
     const fetchToken = async () => {
@@ -109,7 +136,7 @@ const ActiveCallScreen = () => {
         const response = await api.post('/api/v1/call/generate-token', {
           channelName: callSession.channelName,
           callId: callSession.callId,
-          uid: localUid 
+          uid: localUid
         });
 
         if (response.data.success) {
@@ -144,75 +171,82 @@ const ActiveCallScreen = () => {
   // 3. Initialize Agora Engine (Only ONCE)
   useEffect(() => {
     let setupEngine = async () => {
-        try {
-            console.log('🏗️ [Agora] Initializing Engine...');
-            await requestPermissions();
-            engine.current = createAgoraRtcEngine();
-            engine.current.initialize({ appId: appId || '' });
+      try {
+        console.log('🏗️ [Agora] Initializing Engine...');
+        await requestPermissions();
+        engine.current = createAgoraRtcEngine();
+        engine.current.initialize({ appId: appId || '' });
 
-            // Event Listeners
-            engine.current.registerEventHandler({
-              onJoinChannelSuccess: (connection: RtcConnection, elapsed: number) => {
-                console.log('✅ [Agora] Successfully Joined Channel:', connection.channelId, 'with UID:', connection.localUid);
-                setIsJoined(true);
-              },
-              onUserJoined: (connection: RtcConnection, uid: number) => {
-                console.log('👤 [Agora] Remote User Joined with UID:', uid);
-                setRemoteUid(uid);
-              },
-              onUserOffline: (connection: RtcConnection, uid: number) => {
-                console.log('👋 [Agora] Remote User Offline (reason:', uid, ')');
-                setRemoteUid(null);
-                // In 1-to-1, we usually end the call when the other person leaves
-                setTimeout(() => {
-                  handleHangup();
-                }, 1000);
-              },
-              onError: (err, msg) => {
-                console.error('❌ [Agora] Engine Error:', err, msg);
-              }
-            });
+        // Event Listeners
+        engine.current.registerEventHandler({
+          onJoinChannelSuccess: (connection: RtcConnection, elapsed: number) => {
+            console.log('✅ [Agora] Successfully Joined Channel:', connection.channelId, 'with UID:', connection.localUid);
+            setIsJoined(true);
+          },
+          onUserJoined: (connection: RtcConnection, uid: number) => {
+            console.log('👤 [Agora] Remote User Joined with UID:', uid);
+            setRemoteUid(uid);
+            stopRingback(); // Stop ringback when they join
+          },
+          onUserOffline: (connection: RtcConnection, uid: number) => {
+            console.log('👋 [Agora] Remote User Offline (reason:', uid, ')');
+            setRemoteUid(null);
+            // In 1-to-1, we usually end the call when the other person leaves
+            setTimeout(() => {
+              handleHangup();
+            }, 1000);
+          },
+          onError: (err, msg) => {
+            console.error('❌ [Agora] Engine Error:', err, msg);
+          }
+        });
 
-            // Production Audio Configuration
-            await engine.current.enableAudio();
-            
-            // Set optimized audio profile for communication
-            await engine.current.setAudioProfile(
-                AudioProfileType.AudioProfileDefault, 
-                AudioScenarioType.AudioScenarioDefault
-            );
+        // Production Audio Configuration
+        await engine.current.enableAudio();
 
-            // Ensure volumes are explicitly leveled
-            await engine.current.adjustRecordingSignalVolume(100);
-            await engine.current.adjustPlaybackSignalVolume(100);
+        // Set optimized audio profile for communication
+        await engine.current.setAudioProfile(
+          AudioProfileType.AudioProfileDefault,
+          AudioScenarioType.AudioScenarioDefault
+        );
 
-            // Initial Routing: Video starts on speaker, Audio starts on earpiece
-            const shouldBeOnSpeaker = callSession?.type === 'video';
-            await engine.current.setDefaultAudioRouteToSpeakerphone(shouldBeOnSpeaker);
-            await engine.current.setEnableSpeakerphone(shouldBeOnSpeaker);
-            await engine.current.muteLocalAudioStream(false);
-            
-            if (callSession?.type === 'video') {
-                await engine.current.enableVideo();
-                await engine.current.startPreview();
-            }
-            
-            await engine.current.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
-            
-            console.log('✅ [Agora] Engine Ready');
-            setIsEngineReady(true);
-        } catch (e) {
-            console.error('❌ [Agora] Setup Error:', e);
+        // Ensure volumes are explicitly leveled
+        await engine.current.adjustRecordingSignalVolume(100);
+        await engine.current.adjustPlaybackSignalVolume(100);
+
+        // Initial Routing: Video starts on speaker, Audio starts on earpiece
+        const shouldBeOnSpeaker = callSession?.type === 'video';
+        await engine.current.setDefaultAudioRouteToSpeakerphone(shouldBeOnSpeaker);
+        await engine.current.setEnableSpeakerphone(shouldBeOnSpeaker);
+        await engine.current.muteLocalAudioStream(false);
+
+        if (callSession?.type === 'video') {
+          await engine.current.enableVideo();
+          await engine.current.startPreview();
         }
+
+        await engine.current.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
+
+        console.log('✅ [Agora] Engine Ready');
+        setIsEngineReady(true);
+
+        // Start ringback if we're the caller and engine is ready
+        if (callSession?.status === 'OUTGOING') {
+          playRingback();
+        }
+      } catch (e) {
+        console.error('❌ [Agora] Setup Error:', e);
+      }
     };
 
     if (appId && !engine.current) {
-        setupEngine();
+      setupEngine();
     }
 
     return () => {
       if (engine.current) {
         console.log('🧹 [Agora] Releasing Engine Lifecycle');
+        stopRingback();
         engine.current.leaveChannel();
         engine.current.release();
         engine.current = null;
@@ -225,29 +259,29 @@ const ActiveCallScreen = () => {
   // 4. Join Channel (When token and engine are ready)
   useEffect(() => {
     const join = async () => {
-        if (isEngineReady && engine.current && token && appId && localUid && !isJoined) {
-            // Check if callSession and channelName are valid before logging/joining
-            if (!callSession || !callSession.channelName) {
-                console.log('⏳ [Agora] Waiting for channelName to be available in session...', callSession);
-                return;
-            }
-
-            console.log(`🚀 [Agora] Attempting to Join: ${callSession.channelName} | UID: ${localUid}`);
-            try {
-                const result = await engine.current.joinChannel(token, callSession.channelName, localUid, {
-                    clientRoleType: ClientRoleType.ClientRoleBroadcaster,
-                    publishMicrophoneTrack: true,
-                    publishCameraTrack: callSession.type === 'video',
-                    autoSubscribeAudio: true,
-                    autoSubscribeVideo: true,
-                });
-                if (result !== 0) {
-                    console.error('❌ [Agora] joinChannel failed with code:', result);
-                }
-            } catch (e) {
-                console.error('❌ [Agora] Join exception:', e);
-            }
+      if (isEngineReady && engine.current && token && appId && localUid && !isJoined) {
+        // Check if callSession and channelName are valid before logging/joining
+        if (!callSession || !callSession.channelName) {
+          console.log('⏳ [Agora] Waiting for channelName to be available in session...', callSession);
+          return;
         }
+
+        console.log(`🚀 [Agora] Attempting to Join: ${callSession.channelName} | UID: ${localUid}`);
+        try {
+          const result = await engine.current.joinChannel(token, callSession.channelName, localUid, {
+            clientRoleType: ClientRoleType.ClientRoleBroadcaster,
+            publishMicrophoneTrack: true,
+            publishCameraTrack: callSession.type === 'video',
+            autoSubscribeAudio: true,
+            autoSubscribeVideo: true,
+          });
+          if (result !== 0) {
+            console.error('❌ [Agora] joinChannel failed with code:', result);
+          }
+        } catch (e) {
+          console.error('❌ [Agora] Join exception:', e);
+        }
+      }
     };
 
     join();
@@ -286,21 +320,22 @@ const ActiveCallScreen = () => {
   const handleHangup = useCallback(() => {
     if (hasExited.current) return;
     hasExited.current = true;
-    
+
     console.log('📞 [ActiveCallScreen] Hanging up and exiting...');
+    stopRingback();
     endCall();
-    
+
     // Smooth exit
     setTimeout(() => {
-        goBack();
+      goBack();
     }, 100);
   }, [endCall]);
 
   // Exit if call ends from context
   useEffect(() => {
     if (!callSession) {
-        handleHangup();
-        return;
+      handleHangup();
+      return;
     }
 
     const validStates = ['ACTIVE', 'OUTGOING', 'INCOMING'];
@@ -324,7 +359,7 @@ const ActiveCallScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
-      
+
       {/* 1. Main View (Remote Video or Avatar) */}
       <View style={styles.videoGrid}>
         {callSession.type === 'video' && remoteUid ? (
@@ -334,20 +369,20 @@ const ActiveCallScreen = () => {
           />
         ) : (
           <View style={styles.avatarContainer}>
-             <LinearGradient colors={['#1a1c2c', '#2e314e']} style={StyleSheet.absoluteFill} />
-             <View style={styles.avatarGlow}>
-                <Image 
-                    source={{ 
-                        uri: otherPerson?.profileImage || 
-                        'https://i.ibb.co/mcL9L2t/f10ff70a7155e5ab666bcdd1b45b726d.jpg' 
-                    }} 
-                    style={styles.largeAvatar} 
-                />
-             </View>
-             <Text style={styles.remoteName}>{otherPerson?.name || 'Connecting...'}</Text>
-             <Text style={styles.callDuration}>
-                {remoteUid ? formatDuration(callDuration) : 'Ringing...'}
-             </Text>
+            <LinearGradient colors={['#1a1c2c', '#2e314e']} style={StyleSheet.absoluteFill} />
+            <View style={styles.avatarGlow}>
+              <Image
+                source={{
+                  uri: otherPerson?.profileImage ||
+                    'https://i.ibb.co/mcL9L2t/f10ff70a7155e5ab666bcdd1b45b726d.jpg'
+                }}
+                style={styles.largeAvatar}
+              />
+            </View>
+            <Text style={styles.remoteName}>{otherPerson?.name || 'Connecting...'}</Text>
+            <Text style={styles.callDuration}>
+              {remoteUid ? formatDuration(callDuration) : 'Ringing...'}
+            </Text>
           </View>
         )}
 
@@ -366,45 +401,45 @@ const ActiveCallScreen = () => {
       {/* 3. Control Bar */}
       <View style={styles.controlsContainer}>
         <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.8)']}
-            style={styles.controlsGradient}
+          colors={['transparent', 'rgba(0,0,0,0.8)']}
+          style={styles.controlsGradient}
         >
-            <View style={styles.controlsRow}>
-                {callSession.type === 'audio' && (
-                    <TouchableOpacity 
-                        style={[styles.iconButton, !isSpeakerOn && styles.inactiveButton]} 
-                        onPress={toggleSpeaker}
-                    >
-                        <Icon name={isSpeakerOn ? "volume-high" : "volume-low"} size={28} color="white" />
-                    </TouchableOpacity>
-                )}
+          <View style={styles.controlsRow}>
+            {callSession.type === 'audio' && (
+              <TouchableOpacity
+                style={[styles.iconButton, !isSpeakerOn && styles.inactiveButton]}
+                onPress={toggleSpeaker}
+              >
+                <Icon name={isSpeakerOn ? "volume-high" : "volume-low"} size={28} color="white" />
+              </TouchableOpacity>
+            )}
 
-                {callSession.type === 'video' && (
-                    <TouchableOpacity 
-                        style={[styles.iconButton, !isVideoEnabled && styles.inactiveButton]} 
-                        onPress={toggleVideo}
-                    >
-                        <Icon name={isVideoEnabled ? "video" : "video-off"} size={28} color="white" />
-                    </TouchableOpacity>
-                )}
+            {callSession.type === 'video' && (
+              <TouchableOpacity
+                style={[styles.iconButton, !isVideoEnabled && styles.inactiveButton]}
+                onPress={toggleVideo}
+              >
+                <Icon name={isVideoEnabled ? "video" : "video-off"} size={28} color="white" />
+              </TouchableOpacity>
+            )}
 
-                <TouchableOpacity 
-                    style={[styles.iconButton, isMuted && styles.inactiveButton]} 
-                    onPress={toggleMute}
-                >
-                    <Icon name={isMuted ? "microphone-off" : "microphone"} size={28} color="white" />
-                </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.iconButton, isMuted && styles.inactiveButton]}
+              onPress={toggleMute}
+            >
+              <Icon name={isMuted ? "microphone-off" : "microphone"} size={28} color="white" />
+            </TouchableOpacity>
 
-                {callSession.type === 'video' && (
-                    <TouchableOpacity style={styles.iconButton} onPress={switchCamera}>
-                        <Icon name="camera-flip" size={28} color="white" />
-                    </TouchableOpacity>
-                )}
+            {callSession.type === 'video' && (
+              <TouchableOpacity style={styles.iconButton} onPress={switchCamera}>
+                <Icon name="camera-flip" size={28} color="white" />
+              </TouchableOpacity>
+            )}
 
-                <TouchableOpacity style={[styles.iconButton, styles.hangupButton]} onPress={handleHangup}>
-                    <Icon name="phone-hangup" size={32} color="white" />
-                </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={[styles.iconButton, styles.hangupButton]} onPress={handleHangup}>
+              <Icon name="phone-hangup" size={32} color="white" />
+            </TouchableOpacity>
+          </View>
         </LinearGradient>
       </View>
     </SafeAreaView>
