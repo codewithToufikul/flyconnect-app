@@ -10,6 +10,11 @@ export function navigate(name: string, params: any) {
 
 export function goBack() {
   if (navigationRef.isReady()) {
-    navigationRef.goBack();
+    if (navigationRef.canGoBack()) {
+      navigationRef.goBack();
+    } else {
+      // Fallback: if we can't go back, go to Main/Home
+      navigationRef.navigate('Main' as any);
+    }
   }
 }

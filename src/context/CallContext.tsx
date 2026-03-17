@@ -19,14 +19,14 @@ interface CallSession {
   callId: string;
   channelName: string;
   caller: CallUser;
-  receiverId: string; // ID of the person being called
+  receiver: CallUser;
   type: 'audio' | 'video';
   status: 'IDLE' | 'INCOMING' | 'OUTGOING' | 'ACTIVE';
 }
 
 interface CallContextType {
   callSession: CallSession | null;
-  initiateCall: (receiverId: string, type: 'audio' | 'video') => void;
+  initiateCall: (receiverId: string, type: 'audio' | 'video', name: string, image?: string) => void;
   acceptCall: () => void;
   declineCall: () => void;
   cancelCall: () => void;
@@ -51,13 +51,23 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     // 1. Incoming Call
     socket.on('call:incoming', (data: any) => {
       console.log('📞 [CallContext] Incoming call:', data.callId);
+      const mappedCaller = {
+        id: data.caller.id || data.caller._id,
+        name: data.caller.name,
+        profileImage: data.caller.profileImage
+      };
       setCallSession({
         ...data,
-        receiverId: currentUserId,
+        caller: mappedCaller,
+        receiver: {
+          id: currentUserId,
+          name: user.name,
+          profileImage: user.profileImage
+        },
         status: 'INCOMING',
       });
       // Emit ringing to server
-      socket.emit('call:ringing', { callId: data.callId, callerId: data.caller.id });
+      socket.emit('call:ringing', { callId: data.callId, callerId: mappedCaller.id });
     });
 
     // 2. Call Accepted (For Caller)
@@ -79,13 +89,25 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     // 4. Active Session Sync (On Reconnect)
     socket.on('call:active_session', (data: any) => {
       console.log('🔄 [CallContext] Re-syncing active call:', data.callId);
-      // Determine receiverId based on who we are
-      const recId = data.callerId?._id === currentUserId ? data.receiverId?._id : currentUserId;
+      const callerIdStr = data.callerId?._id || data.callerId?.id || data.callerId;
+      const receiverIdStr = data.receiverId?._id || data.receiverId?.id || data.receiverId;
+      const recId = callerIdStr === currentUserId ? receiverIdStr : currentUserId;
+      
+      const receiverData = data.receiverId?._id ? data.receiverId : { id: receiverIdStr, name: 'User' };
+
       setCallSession({
         callId: data.callId,
         channelName: data.channelName,
-        caller: data.callerId,
-        receiverId: recId,
+        caller: {
+          id: callerIdStr,
+          name: data.callerId?.name || 'User',
+          profileImage: data.callerId?.profileImage
+        },
+        receiver: {
+          id: receiverIdStr,
+          name: receiverData.name || 'User',
+          profileImage: receiverData.profileImage
+        },
         type: data.type,
         status: 'ACTIVE',
       });
@@ -101,6 +123,11 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       } : null);
     });
 
+    // 6. Ringing
+    socket.on('call:ringing', (data: { callId: string }) => {
+      console.log('🔔 [CallContext] Peer phone is ringing:', data.callId);
+    });
+
     return () => {
       socket.off('call:incoming');
       socket.off('call:accepted');
@@ -109,6 +136,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       socket.off('call:ended');
       socket.off('call:active_session');
       socket.off('call:request_sent');
+      socket.off('call:ringing');
     };
   }, [socket, user, currentUserId]);
 
@@ -121,7 +149,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [callSession?.status]);
 
-  const initiateCall = useCallback((receiverId: string, type: 'audio' | 'video') => {
+  const initiateCall = useCallback((receiverId: string, type: 'audio' | 'video', name: string, image?: string) => {
     if (!socket) return;
     console.log(`📞 [CallContext] Initiating ${type} call to ${receiverId}`);
     socket.emit('call:request', { receiverId, type });
@@ -129,12 +157,20 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     setCallSession({
         callId: 'loading',
         channelName: '',
-        caller: user as any,
-        receiverId: receiverId,
+        caller: {
+          id: currentUserId,
+          name: user?.name || '',
+          profileImage: user?.profileImage
+        },
+        receiver: {
+          id: receiverId,
+          name: name,
+          profileImage: image
+        },
         type,
         status: 'OUTGOING'
     });
-  }, [socket, user]);
+  }, [socket, user, currentUserId]);
 
   const acceptCall = useCallback(() => {
     if (!socket || !callSession) return;
@@ -158,16 +194,15 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!socket || !callSession) return;
     socket.emit('call:cancel', { 
         callId: callSession.callId, 
-        receiverId: callSession.receiverId
+        receiverId: callSession.receiver.id
     });
     setCallSession(null);
   }, [socket, callSession]);
 
   const endCall = useCallback(() => {
     if (!socket || !callSession) return;
-    // Notify the other user. If we are caller, other is receiver. If we are receiver, other is caller.
     const otherUserId = callSession.caller.id === currentUserId 
-        ? callSession.receiverId 
+        ? callSession.receiver.id 
         : callSession.caller.id;
 
     socket.emit('call:end', { 

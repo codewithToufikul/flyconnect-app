@@ -17,11 +17,12 @@ const IncomingCallScreen = () => {
   const { callSession, acceptCall, declineCall } = useCall();
 
   useEffect(() => {
-    // If call is no longer incoming (cancelled by caller), go back
-    if (!callSession || callSession.status !== 'INCOMING') {
+    // Only go back if the call session is completely gone or finished
+    // If it's 'ACTIVE', the CallProvider will handle moving us to the ActiveCall screen
+    if (!callSession || (callSession.status !== 'INCOMING' && callSession.status !== 'ACTIVE')) {
       goBack();
     }
-  }, [callSession]);
+  }, [callSession?.status]);
 
   if (!callSession) return null;
 

@@ -1410,13 +1410,13 @@ const ChatScreen = ({ route, navigation }: any) => {
                 <View style={styles.headerActions}>
                     <TouchableOpacity 
                         style={styles.iconButton}
-                        onPress={() => initiateCall(otherUserId, 'audio')}
+                        onPress={() => initiateCall(otherUserId, 'audio', otherUser.name, otherUser.profileImage)}
                     >
                         <Icon name="call-outline" size={24} color="#6366F1" />
                     </TouchableOpacity>
                     <TouchableOpacity 
                         style={styles.iconButton}
-                        onPress={() => initiateCall(otherUserId, 'video')}
+                        onPress={() => initiateCall(otherUserId, 'video', otherUser.name, otherUser.profileImage)}
                     >
                         <Icon name="videocam-outline" size={24} color="#6366F1" />
                     </TouchableOpacity>
