@@ -25,8 +25,7 @@ const IncomingCallScreen = () => {
 
   useEffect(() => {
     // Only go back if the call session is completely gone or finished
-    // If it's 'ACTIVE', the CallProvider will handle moving us to the ActiveCall screen
-    if (!callSession || (callSession.status !== 'INCOMING' && callSession.status !== 'ACTIVE')) {
+    if (!callSession || callSession.status !== 'INCOMING') {
       goBack();
     }
   }, [callSession?.status]);

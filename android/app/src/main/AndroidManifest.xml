@@ -12,6 +12,18 @@
         tools:replace="android:maxSdkVersion"
         android:maxSdkVersion="33" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.BIND_TELECOM_CONNECTION_SERVICE" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
     <application
       android:name=".MainApplication"
@@ -28,6 +40,8 @@
         android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
         android:launchMode="singleTask"
         android:windowSoftInputMode="adjustResize"
+        android:showWhenLocked="true"
+        android:turnScreenOn="true"
         android:exported="true">
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
@@ -52,6 +66,20 @@
         android:name="com.google.firebase.messaging.default_notification_channel_id"
         android:value="chat_messages"
         tools:node="replace" />
+
+      <!-- CallKeep Services -->
+      <service android:name="io.wazo.callkeep.VoiceConnectionService"
+        android:label="Wazo"
+        android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+        android:foregroundServiceType="phoneCall"
+        android:exported="true">
+        <intent-filter>
+          <action android:name="android.telecom.ConnectionService" />
+        </intent-filter>
+      </service>
+      <service android:name="io.wazo.callkeep.RNCallKeepBackgroundMessagingService"
+        android:exported="true"
+        android:permission="android.permission.BIND_JOB_SERVICE" />
 
     </application>
 </manifest>

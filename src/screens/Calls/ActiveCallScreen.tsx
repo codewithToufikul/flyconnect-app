@@ -51,7 +51,7 @@ const RINGBACK_URL = 'https://www.soundjay.com/phone_c2026/sounds/phone-calling-
 const RINGBACK_ID = 1;
 
 const ActiveCallScreen = () => {
-  const { callSession, endCall } = useCall();
+  const { callSession, endCall, isAudioActivated } = useCall();
   const { user } = useProfile();
 
   const [token, setToken] = useState<string | null>(null);
@@ -172,10 +172,14 @@ const ActiveCallScreen = () => {
   useEffect(() => {
     let setupEngine = async () => {
       try {
+        if (!appId) {
+          console.warn('⚠️ [Agora] App ID missing - skipping init');
+          return;
+        }
         console.log('🏗️ [Agora] Initializing Engine...');
         await requestPermissions();
         engine.current = createAgoraRtcEngine();
-        engine.current.initialize({ appId: appId || '' });
+        engine.current.initialize({ appId: appId });
 
         // Event Listeners
         engine.current.registerEventHandler({
@@ -259,7 +263,9 @@ const ActiveCallScreen = () => {
   // 4. Join Channel (When token and engine are ready)
   useEffect(() => {
     const join = async () => {
-      if (isEngineReady && engine.current && token && appId && localUid && !isJoined) {
+      const isAudioReady = Platform.OS === 'android' ? true : isAudioActivated;
+
+      if (isEngineReady && engine.current && token && appId && localUid && !isJoined && isAudioReady) {
         // Check if callSession and channelName are valid before logging/joining
         if (!callSession || !callSession.channelName) {
           console.log('⏳ [Agora] Waiting for channelName to be available in session...', callSession);

@@ -14,6 +14,7 @@ import {
     ScrollView,
     Animated,
     Pressable,
+    DeviceEventEmitter,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
@@ -75,7 +76,9 @@ const LoginScreen = () => {
             console.log('Logging in with:', fullNumber); // Debug log
 
             const data = await login({ number: fullNumber, password });
-            if (data.success) navigation.replace('Main');
+            if (data.success) {
+                DeviceEventEmitter.emit('AUTH_UPDATED');
+            }
         } catch (error: any) {
             Alert.alert('Login Failed', error.message || 'Network error. Please try again.');
         } finally {

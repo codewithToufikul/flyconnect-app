@@ -9,6 +9,7 @@ export const Colors = {
   border: '#E2E8F0',
   error: '#EF4444',
   success: '#10B981',
+  white: '#FFFFFF',
   gradient: ['#3843D0', '#00D5A3'], // Blue to Green gradient
   glass: 'rgba(255, 255, 255, 0.8)',
 };

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StyleSheet, View, Platform, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Platform, ActivityIndicator, DeviceEventEmitter } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { BlurView } from '@react-native-community/blur';
 
@@ -16,6 +16,9 @@ import SearchStack from './stacks/SearchStack';
 import ChatScreen from '../screens/Main/ChatScreen';
 import IncomingCallScreen from '../screens/Calls/IncomingCallScreen';
 import ActiveCallScreen from '../screens/Calls/ActiveCallScreen';
+import PermissionScreen from '../screens/Auth/PermissionScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { check, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -61,19 +64,62 @@ const MainTabs = () => {
 const AppNavigator = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [userToken, setUserToken] = useState<string | null>(null);
+    const [permissionsHandled, setPermissionsHandled] = useState(false);
 
     useEffect(() => {
         const checkAuth = async () => {
             try {
-                const token = await getToken();
+                const [token, permissionsFlag] = await Promise.all([
+                    getToken(),
+                    AsyncStorage.getItem('@permissions_handled')
+                ]);
+                
+                console.log('AppNavigator: checkAuth - token:', !!token, 'permissionsFlag:', permissionsFlag);
+
+                let allGranted = permissionsFlag === 'true';
+                
+                // Real-time verification for security
+                if (allGranted && Platform.OS === 'android') {
+                    try {
+                        const [mic, cam, phoneState, phoneNumbers] = await Promise.all([
+                            check(PERMISSIONS.ANDROID.RECORD_AUDIO),
+                            check(PERMISSIONS.ANDROID.CAMERA),
+                            check(PERMISSIONS.ANDROID.READ_PHONE_STATE),
+                            check((PERMISSIONS.ANDROID as any).READ_PHONE_NUMBERS || 'android.permission.READ_PHONE_NUMBERS')
+                        ]);
+
+                        const isSet = (s: string) => s === RESULTS.GRANTED || s === RESULTS.LIMITED || s === RESULTS.UNAVAILABLE;
+                        const isPhoneGranted = isSet(phoneState) || isSet(phoneNumbers);
+
+                        if (!isSet(mic) || !isSet(cam) || !isPhoneGranted) {
+                            console.log('AppNavigator: Blocking real-time permissions check:', { mic, cam, phoneState, phoneNumbers });
+                            allGranted = false;
+                        }
+                    } catch (e) {
+                        console.warn('Real-time permission check failed (safe fallback to granted):', e);
+                    }
+                }
+
+                console.log('AppNavigator: Final state - userToken:', !!token, 'permissionsHandled:', allGranted);
                 setUserToken(token);
+                setPermissionsHandled(allGranted);
             } catch (e) {
                 console.error(e);
             } finally {
                 setIsLoading(false);
             }
         };
+
         checkAuth();
+
+        // Listen for internal state updates (e.g. from PermissionScreen)
+        const sub = DeviceEventEmitter.addListener('PERMISSIONS_UPDATED', checkAuth);
+        const subAuth = DeviceEventEmitter.addListener('AUTH_UPDATED', checkAuth);
+
+        return () => {
+            sub.remove();
+            subAuth.remove();
+        };
     }, []);
 
     if (isLoading) {
@@ -85,28 +131,37 @@ const AppNavigator = () => {
     }
 
     return (
-        <Stack.Navigator
+        <Stack.Navigator 
+            key={permissionsHandled ? (userToken ? 'authorized' : 'unauthorized') : 'permissions'}
             screenOptions={{ headerShown: false }}
-            initialRouteName={userToken ? "Main" : "Welcome"}
         >
-            <Stack.Screen name="Welcome" component={WelcomeScreen} />
-            <Stack.Screen name="Auth" component={LoginScreen} />
-            <Stack.Screen name="Main" component={MainTabs} />
-            <Stack.Screen
-                name="ChatScreen"
-                component={ChatScreen}
-                options={{ headerShown: false }}
-            />
-            <Stack.Screen
-                name="IncomingCall"
-                component={IncomingCallScreen}
-                options={{ headerShown: false, gestureEnabled: false }}
-            />
-            <Stack.Screen
-                name="ActiveCall"
-                component={ActiveCallScreen}
-                options={{ headerShown: false, gestureEnabled: false }}
-            />
+            {!permissionsHandled ? (
+                <Stack.Screen name="Permissions" component={PermissionScreen} />
+            ) : !userToken ? (
+                <>
+                    <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                    <Stack.Screen name="Auth" component={LoginScreen} />
+                </>
+            ) : (
+                <>
+                    <Stack.Screen name="Main" component={MainTabs} />
+                    <Stack.Screen
+                        name="ChatScreen"
+                        component={ChatScreen}
+                        options={{ headerShown: false }}
+                    />
+                    <Stack.Screen
+                        name="IncomingCall"
+                        component={IncomingCallScreen}
+                        options={{ headerShown: false, gestureEnabled: false }}
+                    />
+                    <Stack.Screen
+                        name="ActiveCall"
+                        component={ActiveCallScreen}
+                        options={{ headerShown: false, gestureEnabled: false }}
+                    />
+                </>
+            )}
         </Stack.Navigator>
     );
 };

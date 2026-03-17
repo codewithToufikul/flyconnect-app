@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getUserCache, saveUserCache, getProfileAPI } from '../services/api';
+import { getUserCache, saveUserCache, getProfileAPI, getToken } from '../services/api';
 
 interface User {
     id: string;
@@ -34,10 +34,16 @@ export const ProfileProvider: React.FC<{ children: React.ReactNode }> = ({ child
             }
 
             // 2. Fetch fresh data in the background (SWR pattern)
-            const response = await getProfileAPI();
-            if (response.success && response.user) {
-                setUser(response.user);
-                await saveUserCache(response.user); // Update storage with fresh data
+            const token = await getToken();
+            if (token) {
+                const response = await getProfileAPI();
+                if (response.success && response.user) {
+                    setUser(response.user);
+                    await saveUserCache(response.user); // Update storage with fresh data
+                }
+            } else {
+                console.log('Profile Context: Skipping API call - user not logged in.');
+                setLoading(false);
             }
         } catch (error) {
             console.log('Profile refresh error:', error);
