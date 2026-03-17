@@ -7,14 +7,21 @@ import {
   Image,
   SafeAreaView,
   StatusBar,
+  Vibration,
+  Platform,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Video from 'react-native-video';
+import InCallManager from 'react-native-incall-manager';
 import { useCall } from '../../context/CallContext';
 import { goBack } from '../../navigation/RootNavigation';
 
+const RINGTONE_URL = 'https://res.cloudinary.com/duyrnfagi/video/upload/v1773731369/mixkit-marimba-waiting-ringtone-1360_wi6le1.wav';
+
 const IncomingCallScreen = () => {
   const { callSession, acceptCall, declineCall } = useCall();
+  const [isPlaying, setIsPlaying] = React.useState(true);
 
   useEffect(() => {
     // Only go back if the call session is completely gone or finished
@@ -23,6 +30,39 @@ const IncomingCallScreen = () => {
       goBack();
     }
   }, [callSession?.status]);
+
+  useEffect(() => {
+    console.log('🔔 [IncomingCallScreen] Starting Ringtone Session...');
+    // Force speakerphone and start audio session
+    InCallManager.start({ media: 'audio' });
+    InCallManager.setSpeakerphoneOn(true);
+    InCallManager.setForceSpeakerphoneOn(true);
+    
+    // Start vibration pattern: [delay, vibrate, delay, vibrate...]
+    const VIBRATE_PATTERN = [0, 500, 1000]; 
+    Vibration.vibrate(VIBRATE_PATTERN, true);
+    
+    return () => {
+      console.log('🔇 [IncomingCallScreen] Stopping Ringtone Session');
+      setIsPlaying(false);
+      Vibration.cancel();
+      InCallManager.stop();
+    };
+  }, []);
+
+  const handleAccept = () => {
+    setIsPlaying(false);
+    Vibration.cancel();
+    InCallManager.stop();
+    acceptCall();
+  };
+
+  const handleDecline = () => {
+    setIsPlaying(false);
+    Vibration.cancel();
+    InCallManager.stop();
+    declineCall();
+  };
 
   if (!callSession) return null;
 
@@ -55,7 +95,7 @@ const IncomingCallScreen = () => {
         <View style={styles.actions}>
           <TouchableOpacity
             style={[styles.button, styles.declineButton]}
-            onPress={declineCall}
+            onPress={handleDecline}
           >
             <Icon name="phone-hangup" size={32} color="white" />
             <Text style={styles.buttonText}>Decline</Text>
@@ -63,7 +103,7 @@ const IncomingCallScreen = () => {
 
           <TouchableOpacity
             style={[styles.button, styles.acceptButton]}
-            onPress={acceptCall}
+            onPress={handleAccept}
           >
             <Icon
               name={callSession.type === 'video' ? 'video' : 'phone'}
@@ -73,6 +113,19 @@ const IncomingCallScreen = () => {
             <Text style={styles.buttonText}>Accept</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Hidden Audio Player for Ringtone */}
+        {isPlaying && (
+          <Video
+            source={{ uri: RINGTONE_URL }}
+            repeat={true}
+            paused={!isPlaying}
+            playInBackground={true}
+            playWhenInactive={true}
+            volume={1.0}
+            style={{ width: 0, height: 0 }}
+          />
+        )}
       </LinearGradient>
     </SafeAreaView>
   );
