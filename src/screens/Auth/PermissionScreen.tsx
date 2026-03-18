@@ -89,13 +89,13 @@ const PermissionScreen = ({ navigation }: any) => {
       for (const item of requiredPermissions) {
         try {
           let result = await check(item.permission);
-          
+
           // Special case: for 'phone', check secondary permission if primary is denied
           if (item.id === 'phone' && result !== RESULTS.GRANTED && Platform.OS === 'android') {
             const secondary = await check('android.permission.READ_PHONE_NUMBERS' as any);
             if (secondary === RESULTS.GRANTED) result = RESULTS.GRANTED;
           }
-          
+
           newState[item.id] = result;
         } catch (e) {
           newState[item.id] = RESULTS.DENIED;
@@ -113,7 +113,7 @@ const PermissionScreen = ({ navigation }: any) => {
     try {
       let result = await request(item.permission);
       console.log(`Permission request result for ${item.id}:`, result);
-      
+
       // If primary phone permission is blocked, try the other one in the same group
       if (item.id === 'phone' && result === RESULTS.BLOCKED && Platform.OS === 'android') {
         console.log('Primary phone blocked, trying READ_PHONE_STATE...');
@@ -121,7 +121,7 @@ const PermissionScreen = ({ navigation }: any) => {
       }
 
       await checkAllPermissions();
-      
+
       if (result === RESULTS.BLOCKED) {
         openSettings();
       }
@@ -145,16 +145,16 @@ const PermissionScreen = ({ navigation }: any) => {
     const newState: Record<string, string> = {};
     for (const item of requiredPermissions) {
       let result = await check(item.permission);
-      
+
       // Merge logic for phone
       if (item.id === 'phone' && result !== RESULTS.GRANTED && Platform.OS === 'android') {
         const secondary = await check('android.permission.READ_PHONE_NUMBERS' as any);
         if (secondary === RESULTS.GRANTED) result = RESULTS.GRANTED;
       }
-      
+
       newState[item.id] = result;
     }
-    
+
     const allSet = requiredPermissions
       .filter(p => p.mandatory)
       .every(p => {
@@ -199,8 +199,8 @@ const PermissionScreen = ({ navigation }: any) => {
       <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.refreshBadge} 
+          <TouchableOpacity
+            style={styles.refreshBadge}
             onPress={checkAllPermissions}
             activeOpacity={0.7}
           >
@@ -223,17 +223,17 @@ const PermissionScreen = ({ navigation }: any) => {
             const unavailable = status === RESULTS.UNAVAILABLE;
 
             return (
-              <TouchableOpacity 
-                key={item.id} 
+              <TouchableOpacity
+                key={item.id}
                 style={[styles.permissionItem, unavailable && styles.unavailableItem]}
                 onPress={() => !granted && !unavailable && handleRequest(item)}
                 activeOpacity={0.7}
               >
                 <View style={[styles.permissionIcon, granted && styles.grantedIcon, unavailable && styles.unavailableIcon]}>
-                  <Icon 
-                    name={unavailable ? 'ban-outline' : item.icon} 
-                    size={24} 
-                    color={granted || unavailable ? Colors.white : Colors.primary} 
+                  <Icon
+                    name={unavailable ? 'ban-outline' : item.icon}
+                    size={24}
+                    color={granted || unavailable ? Colors.white : Colors.primary}
                   />
                 </View>
                 <View style={styles.permissionText}>

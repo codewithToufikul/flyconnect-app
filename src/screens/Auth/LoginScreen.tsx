@@ -77,7 +77,8 @@ const LoginScreen = () => {
 
             const data = await login({ number: fullNumber, password });
             if (data.success) {
-                DeviceEventEmitter.emit('AUTH_UPDATED');
+                // Small delay to ensure AsyncStorage is fully flushed before re-routing
+                setTimeout(() => DeviceEventEmitter.emit('AUTH_UPDATED'), 200);
             }
         } catch (error: any) {
             Alert.alert('Login Failed', error.message || 'Network error. Please try again.');

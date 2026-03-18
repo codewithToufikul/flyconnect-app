@@ -1,22 +1,21 @@
-import React, { useState, useCallback } from 'react';
-import { StyleSheet, View, Text, ScrollView, TouchableOpacity, Dimensions, Image, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { StyleSheet, View, Text, ScrollView, TouchableOpacity, Dimensions, Image, ActivityIndicator, RefreshControl } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { Colors, Shadows } from '../../theme/theme';
 import { useProfile } from '../../context/ProfileContext';
 import { getInbox } from '../../services/api';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
-import SocketService from '../../services/SocketService';
-import { useEffect } from 'react';
 import { useSocket } from '../../context/SocketContext';
 import StorageService from '../../services/StorageService';
 
 const { width } = Dimensions.get('window');
 
 const HomeScreen = ({ navigation }: any) => {
-    const { user: currentUser } = useProfile();
+    const { user: currentUser, loading: isProfileLoading } = useProfile();
     const [conversations, setConversations] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
 
     // 1. Load from cache on first mount
     useEffect(() => {
@@ -32,7 +31,8 @@ const HomeScreen = ({ navigation }: any) => {
 
     const firstName = currentUser?.name?.split(' ')[0] || 'User';
 
-    const fetchInbox = useCallback(async () => {
+    const fetchInbox = useCallback(async (isRefreshing = false) => {
+        if (isRefreshing) setRefreshing(true);
         try {
             const response = await getInbox();
             if (response.success) {
@@ -43,8 +43,16 @@ const HomeScreen = ({ navigation }: any) => {
             console.error('Fetch Inbox Error:', error);
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
     }, []);
+
+    // 2. Fetch fresh data when user profile is ready or screen focused
+    useEffect(() => {
+        if (currentUser) {
+            fetchInbox();
+        }
+    }, [currentUser, fetchInbox]);
 
     useFocusEffect(
         useCallback(() => {
@@ -181,10 +189,7 @@ const HomeScreen = ({ navigation }: any) => {
         socket.on('user_status_change', handleStatusChange);
         socket.on('messages_seen', handleSeen);
 
-        console.log('✅ HomeScreen: Socket listeners registered');
-
         return () => {
-            console.log('🧼 Cleaning up HomeScreen socket listeners');
             socket.off('receive_message', handleNewMessage);
             socket.off('user_status_change', handleStatusChange);
             socket.off('messages_seen', handleSeen);
@@ -294,7 +299,18 @@ const HomeScreen = ({ navigation }: any) => {
                 style={StyleSheet.absoluteFill}
             />
 
-            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <ScrollView 
+                contentContainerStyle={styles.scrollContent} 
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl 
+                        refreshing={refreshing} 
+                        onRefresh={() => fetchInbox(true)} 
+                        colors={[Colors.primary]}
+                        tintColor={Colors.primary}
+                    />
+                }
+            >
                 <View style={styles.header}>
                     <Text style={styles.greeting}>Hello, {firstName}!</Text>
                     <View style={styles.titleRow}>

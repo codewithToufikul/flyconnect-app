@@ -9,6 +9,7 @@ import { useSocket } from './SocketContext';
 import { useProfile } from './ProfileContext';
 import { navigate } from '../navigation/RootNavigation';
 import CallKeepService from '../services/CallKeepService';
+import NotificationService from '../services/NotificationService';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { pendingCallActions, clearPendingCallActions } from '../services/CallActions';
@@ -223,6 +224,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       if (callSession?.callUUID) {
         CallKeepService.endCall(callSession.callUUID);
       }
+      
+      // Production fix: Clear lingering notifications
+      NotificationService.cancelAllCallNotifications();
+      
       setCallSession(null);
     };
 
@@ -346,6 +351,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const acceptCall = useCallback(() => {
     if (!socket || !callSession) return;
+    
+    // Clear notifications immediately
+    NotificationService.cancelAllCallNotifications();
+
     socket.emit('call:accept', { 
         callId: callSession.callId, 
         callerId: callSession.caller.id 
@@ -357,6 +366,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const declineCall = useCallback(() => {
     if (!socket || !callSession) return;
+
+    // Clear notifications immediately
+    NotificationService.cancelAllCallNotifications();
+
     socket.emit('call:decline', { 
         callId: callSession.callId, 
         callerId: callSession.caller.id 
@@ -369,6 +382,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const cancelCall = useCallback(() => {
     if (!socket || !callSession) return;
+
+    // Clear notifications immediately
+    NotificationService.cancelAllCallNotifications();
+
     socket.emit('call:cancel', { 
         callId: callSession.callId, 
         receiverId: callSession.receiver.id
@@ -381,6 +398,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const endCall = useCallback(() => {
     if (!socket || !callSession) return;
+
+    // Clear notifications immediately
+    NotificationService.cancelAllCallNotifications();
+
     const otherUserId = callSession.caller.id === currentUserId 
         ? callSession.receiver.id 
         : callSession.caller.id;

@@ -5,7 +5,10 @@ class SocketService {
   private socket: Socket | null = null;
 
   async connect() {
-    if (this.socket?.connected) return;
+    // If already connected, disconnect to ensure fresh auth with new token
+    if (this.socket) {
+      this.socket.disconnect();
+    }
 
     const token = await getToken();
     if (!token) return;

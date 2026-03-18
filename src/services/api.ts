@@ -16,7 +16,7 @@ const PRODUCTION_URL = 'https://your-production-url.com';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://10.182.169.191:10000', // Updated local IP address
+  android: 'http://10.76.107.191:10000', // Updated local IP address
   ios: 'http://localhost:10000',
   default: 'http://localhost:10000',
 });
@@ -119,6 +119,10 @@ export const getChatMessages = async (conversationId: string, page = 1) => {
 
 export const getInbox = async () => {
   return get('/api/v1/chats/inbox');
+};
+
+export const declineCallAPI = async (data: {callId: string; callerId: string}) => {
+  return post('/api/v1/calls/decline', data);
 };
 
 export const get = async <T = any>(url: string, config?: any): Promise<T> => {

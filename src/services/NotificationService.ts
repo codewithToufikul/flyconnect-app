@@ -8,11 +8,19 @@ import notifee, {
   EventType,
   AndroidCategory,
 } from '@notifee/react-native';
-import api, { getToken } from './api';
+import api, {getToken} from './api';
 
 const FCM_TOKEN_KEY = '@fcm_token';
 const CHAT_CHANNEL_ID = 'chat_messages';
 const CALL_CHANNEL_ID = 'calls';
+
+const generateUUID = () => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
 
 async function ensureAndroidChannels() {
   if (Platform.OS !== 'android') return;
@@ -33,12 +41,14 @@ async function ensureAndroidChannels() {
       name: 'Incoming Calls',
       importance: AndroidImportance.HIGH,
       visibility: AndroidVisibility.PUBLIC,
-      sound: 'default',
+      sound: 'ringtone', // References res/raw/ringtone.wav
       vibration: true,
       lightColor: '#ff0000',
     });
 
-    console.log('✅ [NotificationService] Android notification channels ensured.');
+    console.log(
+      '✅ [NotificationService] Android notification channels ensured.',
+    );
   } catch (e) {
     console.error('❌ [NotificationService] Failed to create channels:', e);
   }
@@ -87,7 +97,7 @@ class NotificationService {
 
       // Modular API: getToken()
       const freshToken = await messaging().getToken();
-      
+
       if (freshToken) {
         console.log('Firebase: Syncing FCM Token with backend (Force Sync)...');
         await AsyncStorage.setItem(FCM_TOKEN_KEY, freshToken);
@@ -115,17 +125,22 @@ class NotificationService {
    */
   async displayCallNotification(remoteMessage: any) {
     if (Platform.OS !== 'android') return;
-    
-    const { callerName, callId, type, callerId, callUUID } = remoteMessage.data || {};
-    
+
+    const data = remoteMessage.data || {};
+    const {callerName, callId, type, callerId} = data;
+    const uuid = data.callUUID || generateUUID();
+
     try {
+      // We will handle CallKeep registration directly in the Background Handler
+      // to avoid race conditions. So we remove the redundant call here.
+
       await notifee.displayNotification({
         id: callId || 'incoming_call',
-        title: `Incoming ${type || 'audio'} call`,
-        body: callerName || 'Unknown Caller',
+        title: `Incoming ${data.callType || 'audio'} call`,
+        body: `${callerName || 'Someone'} is calling you...`,
         data: {
-          ...remoteMessage.data,
-          callUUID: callUUID || 'unknown'
+          ...data,
+          callUUID: uuid,
         },
         android: {
           channelId: CALL_CHANNEL_ID,
@@ -133,10 +148,11 @@ class NotificationService {
           category: AndroidCategory.CALL,
           visibility: AndroidVisibility.PUBLIC,
           ongoing: true,
+          autoCancel: false,
           smallIcon: 'ic_launcher',
           fullScreenAction: {
             id: 'default',
-            mainComponent: 'FlyConnect', // Wake app
+            mainComponent: 'FlyConnect',
           },
           pressAction: {
             id: 'default',
@@ -145,11 +161,11 @@ class NotificationService {
           actions: [
             {
               title: 'Answer',
-              pressAction: { id: 'answer', launchActivity: 'default' },
+              pressAction: {id: 'answer', launchActivity: 'default'},
             },
             {
               title: 'Decline',
-              pressAction: { id: 'decline' },
+              pressAction: {id: 'decline'},
             },
           ],
         },
@@ -163,12 +179,16 @@ class NotificationService {
    * Display Foreground Banner for chat messages
    */
   private async displayForegroundNotification(remoteMessage: any) {
-    const title = remoteMessage.data?.senderName || remoteMessage.notification?.title || 'New Message';
-    const body = remoteMessage.data?.content || remoteMessage.notification?.body || '';
+    const title =
+      remoteMessage.data?.senderName ||
+      remoteMessage.notification?.title ||
+      'New Message';
+    const body =
+      remoteMessage.data?.content || remoteMessage.notification?.body || '';
 
     try {
       await notifee.displayNotification({
-        id: remoteMessage.messageId, 
+        id: remoteMessage.messageId,
         title,
         body,
         data: remoteMessage.data || {},
@@ -194,11 +214,18 @@ class NotificationService {
   }
 
   listenForForegroundMessages() {
-    console.log('👂 [NotificationService] Listening for foreground messages...');
+    console.log(
+      '👂 [NotificationService] Listening for foreground messages...',
+    );
     return messaging().onMessage(async remoteMessage => {
-      if (remoteMessage.data?.type === 'CALL_INCOMING') {
-        // For selfManaged, we MUST show something or launch Activity
-        await this.displayCallNotification(remoteMessage);
+      const type = remoteMessage.data?.type;
+      console.log('📱 [NotificationService] Foreground message:', type);
+      
+      if (type === 'CALL_INCOMING') {
+        console.log('📞 [NotificationService] Call incoming in foreground, skipping banner.');
+      } else if (type === 'CALL_CANCELLED' || type === 'CALL_ENDED') {
+        console.log('🛑 [NotificationService] Call cancelled/ended, clearing notifications.');
+        await this.cancelAllCallNotifications();
       } else {
         await this.displayForegroundNotification(remoteMessage);
       }
@@ -220,42 +247,60 @@ class NotificationService {
         console.log('Firebase: Skipping token sync - User not logged in.');
       }
     }
-    
+
     // Listen for notifee events (like tapping a banner while app is open)
-    notifee.onForegroundEvent(async ({ type, detail }) => {
-      const { notification, pressAction } = detail;
+    notifee.onForegroundEvent(async ({type, detail}) => {
+      const {notification, pressAction} = detail;
 
       if (type === EventType.PRESS) {
         console.log('🖱️ [NotificationService] Foreground banner pressed');
-        if (notification?.data?.type === 'CALL_INCOMING') {
-           // If they just press the notification body, just open the app (navigate toscreen)
-           // App.tsx handles general navigation, but if we're here, 
-           // we should ensure they go to IncomingCall screen.
-           // In foreground, we already navigate via socket handler in context.
+        if (notification?.id) {
+          await notifee.cancelNotification(notification.id);
         }
       }
 
       if (type === EventType.ACTION_PRESS) {
         const uuid = (notification?.data?.callUUID as string) || 'unknown';
+        
+        // Always cancel notification on any action press
+        if (notification?.id) {
+          await notifee.cancelNotification(notification.id);
+        }
+
         if (pressAction?.id === 'answer') {
           console.log('📞 [Notifee] Foreground Answer pressed for:', uuid);
           if (uuid !== 'unknown') {
             RNCallKeep.answerIncomingCall(uuid);
-          } else {
-            // Fallback for missing UUID: answer all if possible or just trigger first
-            console.warn('⚠️ [NotificationService] Answer pressed but UUID is missing!');
           }
         }
 
         if (pressAction?.id === 'decline') {
           console.log('🛑 [Notifee] Foreground Decline pressed');
-          RNCallKeep.endAllCalls();
-          if (notification?.id) {
-            await notifee.cancelNotification(notification.id);
+          
+          try {
+            const data = notification?.data as any;
+            if (data?.callId && data?.callerId) {
+              const { declineCallAPI } = require('./api');
+              await declineCallAPI({
+                callId: data.callId,
+                callerId: data.callerId
+              });
+            }
+          } catch (err) {
+            console.error('❌ [Notifee] Failed to signal decline in foreground:', err);
           }
+
+          RNCallKeep.endAllCalls();
         }
       }
     });
+  }
+
+  /**
+   * Helper to clear all call notifications
+   */
+  async cancelAllCallNotifications() {
+    await notifee.cancelAllNotifications();
   }
 }
 

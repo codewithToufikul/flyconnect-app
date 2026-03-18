@@ -133,7 +133,7 @@ const ActiveCallScreen = () => {
       try {
         setLoading(true);
         console.log(`🎫 [ActiveCallScreen] Fetching token for channel: ${callSession.channelName}, UID: ${localUid}`);
-        const response = await api.post('/api/v1/call/generate-token', {
+        const response = await api.post('/api/v1/calls/generate-token', {
           channelName: callSession.channelName,
           callId: callSession.callId,
           uid: localUid

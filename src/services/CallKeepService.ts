@@ -1,5 +1,5 @@
 import RNCallKeep from 'react-native-callkeep';
-import { Platform } from 'react-native';
+import {Platform} from 'react-native';
 
 const options = {
   ios: {
@@ -32,21 +32,33 @@ class CallKeepService {
     try {
       await RNCallKeep.setup(options);
       RNCallKeep.setAvailable(true);
-      
+
       // CallKeep Listeners
       RNCallKeep.addEventListener('answerCall', callbacks.onAnswerCall);
       RNCallKeep.addEventListener('endCall', callbacks.onEndCall);
       if (callbacks.onActivateAudioSession) {
-        RNCallKeep.addEventListener('didActivateAudioSession', callbacks.onActivateAudioSession);
+        RNCallKeep.addEventListener(
+          'didActivateAudioSession',
+          callbacks.onActivateAudioSession,
+        );
       }
       if (callbacks.onMuteCall) {
-        RNCallKeep.addEventListener('didPerformSetMutedCallAction', callbacks.onMuteCall);
+        RNCallKeep.addEventListener(
+          'didPerformSetMutedCallAction',
+          callbacks.onMuteCall,
+        );
       }
       if (callbacks.onToggleAudioRoute) {
-        RNCallKeep.addEventListener('didChangeAudioRoute', callbacks.onToggleAudioRoute);
+        RNCallKeep.addEventListener(
+          'didChangeAudioRoute',
+          callbacks.onToggleAudioRoute,
+        );
       }
       if (callbacks.onShowIncomingCallUi) {
-        RNCallKeep.addEventListener('showIncomingCallUi', callbacks.onShowIncomingCallUi);
+        RNCallKeep.addEventListener(
+          'showIncomingCallUi',
+          callbacks.onShowIncomingCallUi,
+        );
       }
 
       if (Platform.OS === 'android') {
@@ -61,14 +73,24 @@ class CallKeepService {
     }
   }
 
-  displayIncomingCall(uuid: string, handle: string, localizedCallerName: string) {
+  displayIncomingCall(
+    uuid: string,
+    handle: string,
+    localizedCallerName: string,
+  ) {
     if (!uuid) return;
     const safeHandle = handle || 'Unknown';
     const safeName = localizedCallerName || 'Unknown Caller';
     console.log(`📞 [CallKeep] Displaying Incoming: ${uuid} for ${safeName}`);
-    
+
     try {
-      RNCallKeep.displayIncomingCall(uuid, safeHandle, safeName, 'number', false);
+      RNCallKeep.displayIncomingCall(
+        uuid,
+        safeHandle,
+        safeName,
+        'number',
+        false,
+      );
     } catch (e) {
       console.error('❌ [CallKeep] Display Incoming Failed:', e);
     }

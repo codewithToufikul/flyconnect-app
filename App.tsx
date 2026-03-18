@@ -1,13 +1,13 @@
-import React, {useEffect, useRef} from 'react';
-import {NavigationContainer, NavigationContainerRef} from '@react-navigation/native';
-import {StatusBar, LogBox, Platform} from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
+import { StatusBar, LogBox, Platform } from 'react-native';
 import AppNavigator from './src/navigation/AppNavigator';
-import {ProfileProvider} from './src/context/ProfileContext';
-import {SocketProvider} from './src/context/SocketContext';
-import {CallProvider} from './src/context/CallContext';
+import { ProfileProvider } from './src/context/ProfileContext';
+import { SocketProvider } from './src/context/SocketContext';
+import { CallProvider } from './src/context/CallContext';
 import NotificationService from './src/services/NotificationService';
 import messaging from '@react-native-firebase/messaging';
-import {get} from './src/services/api';
+import { get, declineCallAPI } from './src/services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,11 +55,14 @@ if (Platform.OS === 'android') {
 // ─────────────────────────────────────────────────────────────────────────────
 messaging().setBackgroundMessageHandler(async remoteMessage => {
   console.log('🌌 [FCM] Killed/Background message:', remoteMessage.data);
-  
-  if (remoteMessage.data?.type === 'CALL_INCOMING') {
-    const { callId, callerName, callerId, callType } = remoteMessage.data;
+
+  const type = remoteMessage.data?.type;
+
+  if (type === 'CALL_INCOMING') {
+    const data = remoteMessage.data as any;
+    const { callId, callerName, callerId, callType } = data || {};
     const uuid = generateUUID();
-    
+
     // Save to AsyncStorage for the main app process to see on mount
     await AsyncStorage.setItem('@pending_call_data', JSON.stringify({
       callId,
@@ -70,12 +73,15 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
       timestamp: Date.now()
     }));
 
-    RNCallKeep.displayIncomingCall(uuid, callerName as string, callerName as string);
-    
+    // We only display the Notifee notification in the background to avoid duplicates.
     await NotificationService.displayCallNotification({
       ...remoteMessage,
       data: { ...remoteMessage.data, callUUID: uuid }
     });
+  } else if (type === 'CALL_CANCELLED' || type === 'CALL_ENDED') {
+    console.log('🛑 [FCM] Call cancelled/ended, clearing notifications.');
+    await notifee.cancelAllNotifications(); 
+    RNCallKeep.endAllCalls();
   }
 });
 
@@ -87,9 +93,20 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 
   console.log('🌌 [Notifee-BG] Event:', type, pressAction?.id);
 
+  if (type === EventType.PRESS) {
+    if (notification?.id) {
+       await notifee.cancelNotification(notification.id);
+    }
+  }
+
   if (type === EventType.ACTION_PRESS && pressAction?.id === 'answer') {
     console.log('📞 [Notifee-BG] Answer clicked');
     
+    // Clear notification immediately since we're answering
+    if (notification?.id) {
+       await notifee.cancelNotification(notification.id);
+    }
+
     await AsyncStorage.setItem('@pending_call_action', JSON.stringify({
       action: 'answered',
       callId: notification?.data?.callId,
@@ -112,7 +129,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 
   if (type === EventType.PRESS) {
     console.log('📱 [Notifee-BG] Tapped body');
-    
+
     await AsyncStorage.setItem('@pending_call_action', JSON.stringify({
       action: 'tapped',
       callId: notification?.data?.callId,
@@ -123,6 +140,29 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     }));
 
     RNCallKeep.backToForeground();
+  }
+
+  if (type === EventType.ACTION_PRESS && pressAction?.id === 'decline') {
+    console.log('🛑 [Notifee-BG] Decline clicked');
+    
+    // Clear notification immediately since we're declining
+    if (notification?.id) {
+       await notifee.cancelNotification(notification.id);
+    }
+
+    try {
+      const data = notification?.data as any;
+      if (data?.callId && data?.callerId) {
+        await declineCallAPI({
+          callId: data.callId,
+          callerId: data.callerId
+        });
+      }
+    } catch (err) {
+      console.error('❌ [Notifee-BG] Failed to signal decline:', err);
+    }
+
+    RNCallKeep.endAllCalls();
   }
 });
 
@@ -146,7 +186,7 @@ async function navigateToChat(
       name: data.senderName || 'User',
       profileImage: data.senderImage || null,
     };
-    navigationRef.navigate('ChatScreen', {user: senderUser});
+    navigationRef.navigate('ChatScreen', { user: senderUser });
   } catch {
     // Fallback: navigate with minimal data from notification payload
     navigationRef.navigate('ChatScreen', {
@@ -159,7 +199,7 @@ async function navigateToChat(
   }
 }
 
-import {navigationRef} from './src/navigation/RootNavigation';
+import { navigationRef } from './src/navigation/RootNavigation';
 
 const App = () => {
 
