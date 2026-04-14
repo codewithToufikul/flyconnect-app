@@ -12,7 +12,8 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		5E51F201D10547D1DB8CAFF8 /* Pods_FlyConnect.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 00BF08C5FA8FBBA6BE7F1EA1 /* Pods_FlyConnect.framework */; };
-		6F0FDBA82F668D520071E8E9 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 6F0FDBA72F668D520071E8E9 /* GoogleService-Info.plist */; };
+		6FFBB7632F84180800A50CC1 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 6FFBB7622F84180800A50CC1 /* GoogleService-Info.plist */; };
+		6FFBB7642F84180800A50CC1 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 6FFBB7622F84180800A50CC1 /* GoogleService-Info.plist */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		BC52D3CED482CEB0D48EC206 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		BDA1C236ABDF32387179BE13 /* Pods_FlyConnect_FlyConnectTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 02E9328236E51AABCB7319EB /* Pods_FlyConnect_FlyConnectTests.framework */; };
@@ -44,8 +45,8 @@
 		1907E405BDFEF7C79F846170 /* Pods-FlyConnect-FlyConnectTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-FlyConnect-FlyConnectTests.debug.xcconfig"; path = "Target Support Files/Pods-FlyConnect-FlyConnectTests/Pods-FlyConnect-FlyConnectTests.debug.xcconfig"; sourceTree = "<group>"; };
 		5793B6EF3DFCED2B4807466E /* Pods-FlyConnect-FlyConnectTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-FlyConnect-FlyConnectTests.release.xcconfig"; path = "Target Support Files/Pods-FlyConnect-FlyConnectTests/Pods-FlyConnect-FlyConnectTests.release.xcconfig"; sourceTree = "<group>"; };
 		6C303BAA041764FB70F517DD /* Pods-FlyConnect.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-FlyConnect.debug.xcconfig"; path = "Target Support Files/Pods-FlyConnect/Pods-FlyConnect.debug.xcconfig"; sourceTree = "<group>"; };
-		6F0FDBA72F668D520071E8E9 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		6F13A4FFD82AA179BA3A1686 /* Pods-FlyConnect.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-FlyConnect.release.xcconfig"; path = "Target Support Files/Pods-FlyConnect/Pods-FlyConnect.release.xcconfig"; sourceTree = "<group>"; };
+		6FFBB7622F84180800A50CC1 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = FlyConnect/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
@@ -121,7 +122,7 @@
 		83CBB9F61A601CBA00E9B192 = {
 			isa = PBXGroup;
 			children = (
-				6F0FDBA72F668D520071E8E9 /* GoogleService-Info.plist */,
+				6FFBB7622F84180800A50CC1 /* GoogleService-Info.plist */,
 				13B07FAE1A68108700A75B9A /* FlyConnect */,
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
 				00E356EF1AD99517003FC87E /* FlyConnectTests */,
@@ -241,6 +242,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6FFBB7642F84180800A50CC1 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -249,7 +251,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
-				6F0FDBA82F668D520071E8E9 /* GoogleService-Info.plist in Resources */,
+				6FFBB7632F84180800A50CC1 /* GoogleService-Info.plist in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				BC52D3CED482CEB0D48EC206 /* PrivacyInfo.xcprivacy in Resources */,
 			);
@@ -451,7 +453,7 @@
 					"-lc++",
 					"$(inherited)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect;
+				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FlyConnect.app/FlyConnect";
 			};
@@ -475,7 +477,7 @@
 					"-lc++",
 					"$(inherited)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect;
+				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FlyConnect.app/FlyConnect";
 			};
@@ -489,6 +491,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = FlyConnect/FlyConnect.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = G79RA8Y9F3;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = FlyConnect/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -502,7 +505,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect;
+				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect.app;
 				PRODUCT_NAME = FlyConnect;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -518,6 +521,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = FlyConnect/FlyConnect.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = G79RA8Y9F3;
 				INFOPLIST_FILE = FlyConnect/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -530,7 +534,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect;
+				PRODUCT_BUNDLE_IDENTIFIER = com.flyconnect.app;
 				PRODUCT_NAME = FlyConnect;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";

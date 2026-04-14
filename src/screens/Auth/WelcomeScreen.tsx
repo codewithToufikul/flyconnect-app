@@ -7,16 +7,52 @@ import {
     Image,
     Dimensions,
     SafeAreaView,
+    ActivityIndicator,
+    Alert,
+    DeviceEventEmitter,
+    Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { Colors, Shadows } from '../../theme/theme';
+import { loginWithFlyBook } from '../../services/authServices';
 
 const { width } = Dimensions.get('window');
 
 const WelcomeScreen = () => {
     const navigation = useNavigation<any>();
+
+    // Loading state while we exchange the FlyBook token for a FlyConnect token
+    const [isSSOLoading, setIsSSOLoading] = React.useState(false);
+
+    React.useEffect(() => {
+        // We now handle deep links globally in AppNavigator.tsx
+        // But we listen for the 'SSO_LOADING' event if we want to show a spinner here
+        const sub = DeviceEventEmitter.addListener('SSO_LOADING', (loading: boolean) => {
+            setIsSSOLoading(loading);
+        });
+        return () => sub.remove();
+    }, []);
+
+    const handleFlyBookSignInPress = async () => {
+        const url = 'flybook://sso-auth?callback=flyconnect';
+        console.log('🚀 [SSO] Requesting FlyBook SSO...');
+        const supported = await Linking.canOpenURL(url);
+
+        if (supported) {
+            await Linking.openURL(url);
+        } else {
+            Alert.alert(
+                'FlyBook Not Found',
+                'Please install the FlyBook app to use this feature.',
+                [{ text: 'OK' }]
+            );
+        }
+    };
+
+
 
     return (
         <SafeAreaView style={styles.container}>
@@ -52,15 +88,24 @@ const WelcomeScreen = () => {
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={styles.secondaryButton}
-                            onPress={() => { }} // Integration for FlyBook later
+                            style={[styles.secondaryButton, isSSOLoading && styles.secondaryButtonDisabled]}
+                            onPress={handleFlyBookSignInPress}
                             activeOpacity={0.8}
+                            disabled={isSSOLoading}
                         >
-                            <Icon name="at-circle-outline" size={24} color={Colors.primary} style={styles.buttonIcon} />
-                            <Text style={styles.secondaryButtonText}>Sign In with FlyBook</Text>
+                            {isSSOLoading ? (
+                                <ActivityIndicator color={Colors.primary} style={styles.buttonIcon} />
+                            ) : (
+                                <Icon name="at-circle-outline" size={24} color={Colors.primary} style={styles.buttonIcon} />
+                            )}
+                            <Text style={styles.secondaryButtonText}>
+                                {isSSOLoading ? 'Signing in...' : 'Sign In with FlyBook'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 </View>
+
+
 
                 {/* Footer - pinned to bottom */}
                 <View style={styles.footer}>
@@ -141,6 +186,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         ...Shadows.default,
     },
+    secondaryButtonDisabled: {
+        opacity: 0.6,
+    },
     buttonIcon: {
         marginRight: 10,
     },
@@ -160,6 +208,93 @@ const styles = StyleSheet.create({
     },
     footerLink: {
         color: Colors.primary,
+        fontWeight: '600',
+    },
+
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(15, 23, 42, 0.6)',
+        justifyContent: 'flex-end',
+    },
+    modalContent: {
+        backgroundColor: Colors.surface,
+        borderTopLeftRadius: 32,
+        borderTopRightRadius: 32,
+        padding: 24,
+        ...Shadows.default,
+    },
+    modalHeader: {
+        alignItems: 'center',
+        marginBottom: 24,
+    },
+    modalIndicator: {
+        width: 40,
+        height: 5,
+        backgroundColor: Colors.border,
+        borderRadius: 3,
+        marginBottom: 16,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: '800',
+        color: Colors.text,
+    },
+    accountCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: Colors.background,
+        padding: 16,
+        borderRadius: 20,
+        borderWidth: 1.5,
+        borderColor: Colors.border,
+        marginBottom: 24,
+    },
+    modalAvatar: {
+        width: 60,
+        height: 60,
+        borderRadius: 30,
+        marginRight: 16,
+        borderWidth: 2,
+        borderColor: Colors.primary,
+    },
+    accountInfo: {
+        flex: 1,
+    },
+    accountName: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: Colors.text,
+        marginBottom: 4,
+    },
+    accountStatus: {
+        fontSize: 13,
+        color: Colors.secondary,
+        fontWeight: '600',
+    },
+    modalPrimaryButton: {
+        height: 60,
+        backgroundColor: Colors.primary,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 12,
+        ...Shadows.primary,
+    },
+    modalPrimaryButtonText: {
+        color: '#FFF',
+        fontSize: 17,
+        fontWeight: '700',
+    },
+    modalSecondaryButton: {
+        height: 60,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    modalSecondaryButtonText: {
+        color: Colors.textSecondary,
+        fontSize: 16,
         fontWeight: '600',
     },
 });

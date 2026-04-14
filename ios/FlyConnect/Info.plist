@@ -32,9 +32,11 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>$(PRODUCT_NAME) needs access to your location to show nearby users and enhance your connection experience.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>$(PRODUCT_NAME) needs access to your microphone to record voice messages.</string>
+	<string>$(PRODUCT_NAME) needs access to your microphone for audio and video calls.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>$(PRODUCT_NAME) needs access to your camera for video calls and profile pictures.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>AntDesign.ttf</string>

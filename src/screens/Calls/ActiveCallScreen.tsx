@@ -22,10 +22,20 @@ import {
   RemoteVideoStateReason,
   AudioProfileType,
   AudioScenarioType,
+  VideoSourceType,
+  LocalVideoStreamState,
+  LocalVideoStreamReason,
+  LocalAudioStreamState,
+  LocalAudioStreamReason,
+  RemoteAudioState,
+  RemoteAudioStateReason,
+  AudioVolumeInfo,
+  UserOfflineReasonType,
 } from 'react-native-agora';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import InCallManager from 'react-native-incall-manager';
 import { useCall } from '../../context/CallContext';
 import { useProfile } from '../../context/ProfileContext';
 import { goBack } from '../../navigation/RootNavigation';
@@ -177,61 +187,119 @@ const ActiveCallScreen = () => {
           return;
         }
         console.log('🏗️ [Agora] Initializing Engine...');
+        const isVideoCall = callSession?.type === 'video';
         await requestPermissions();
         engine.current = createAgoraRtcEngine();
         engine.current.initialize({ appId: appId });
 
-        // Event Listeners
+        // Event Listeners (Agora v4)
         engine.current.registerEventHandler({
           onJoinChannelSuccess: (connection: RtcConnection, elapsed: number) => {
-            console.log('✅ [Agora] Successfully Joined Channel:', connection.channelId, 'with UID:', connection.localUid);
+            console.log('✅ [Agora-Diag] Joined Success:', connection.channelId, 'UID:', connection.localUid);
             setIsJoined(true);
+
+            // ✅ FIX: Speaker & video preview set AFTER joining to prevent audio routing reset
+            if (isVideoCall) {
+              engine.current?.setEnableSpeakerphone(true);
+              engine.current?.setDefaultAudioRouteToSpeakerphone(true);
+              engine.current?.startPreview();
+
+              // 🔊 Force speaker ON via InCallManager on Android for video calls
+              if (Platform.OS === 'android') {
+                InCallManager.setSpeakerphoneOn(true);
+                InCallManager.setForceSpeakerphoneOn(true);
+              }
+            }
+            if (Platform.OS === 'ios') {
+              InCallManager.setForceSpeakerphoneOn(isVideoCall);
+            }
           },
-          onUserJoined: (connection: RtcConnection, uid: number) => {
-            console.log('👤 [Agora] Remote User Joined with UID:', uid);
+          onUserJoined: (connection: RtcConnection, uid: number, elapsed: number) => {
+            console.log('👤 [Agora-Diag] Remote User Joined:', uid);
             setRemoteUid(uid);
-            stopRingback(); // Stop ringback when they join
+            stopRingback();
           },
-          onUserOffline: (connection: RtcConnection, uid: number) => {
-            console.log('👋 [Agora] Remote User Offline (reason:', uid, ')');
+          onUserOffline: (connection: RtcConnection, remoteUid: number, reason: UserOfflineReasonType) => {
+            console.log('👋 [Agora-Diag] Remote User Offline | UID:', remoteUid, 'Code:', reason);
             setRemoteUid(null);
-            // In 1-to-1, we usually end the call when the other person leaves
-            setTimeout(() => {
-              handleHangup();
-            }, 1000);
+            handleHangup();
           },
-          onError: (err, msg) => {
-            console.error('❌ [Agora] Engine Error:', err, msg);
+          onLocalAudioStateChanged: (connection: RtcConnection, state: LocalAudioStreamState, error: LocalAudioStreamReason) => {
+            console.log('🎤 [Agora-Diag] Local Audio State:', state, 'Error:', error);
+          },
+          onRemoteAudioStateChanged: (connection: RtcConnection, remoteUid: number, state: RemoteAudioState, reason: RemoteAudioStateReason, elapsed: number) => {
+            console.log('🔊 [Agora-Diag] Remote Audio UID:', remoteUid, 'State:', state, 'Reason:', reason);
+          },
+          onAudioRoutingChanged: (routing: number) => {
+            console.log('📡 [Agora-Diag] Routing Changed to:', routing);
+          },
+          onAudioVolumeIndication: (connection: RtcConnection, speakers: AudioVolumeInfo[], speakerNumber: number, totalVolume: number) => {
+            if (totalVolume > 5) {
+              console.log('📊 [Agora-Diag] Volume Detect:', totalVolume);
+            }
+          },
+          onLocalVideoStateChanged: (source: VideoSourceType, state: LocalVideoStreamState, error: LocalVideoStreamReason) => {
+            console.log('📹 [Agora-Diag] Local Video State:', state, 'Error:', error);
+          },
+          onError: (err: number, msg: string) => {
+            console.error('❌ [Agora-Diag] Engine Error:', err, msg);
           }
         });
 
-        // Production Audio Configuration
-        await engine.current.enableAudio();
-
-        // Set optimized audio profile for communication
-        await engine.current.setAudioProfile(
-          AudioProfileType.AudioProfileDefault,
-          AudioScenarioType.AudioScenarioDefault
-        );
-
-        // Ensure volumes are explicitly leveled
-        await engine.current.adjustRecordingSignalVolume(100);
-        await engine.current.adjustPlaybackSignalVolume(100);
-
-        // Initial Routing: Video starts on speaker, Audio starts on earpiece
-        const shouldBeOnSpeaker = callSession?.type === 'video';
-        await engine.current.setDefaultAudioRouteToSpeakerphone(shouldBeOnSpeaker);
-        await engine.current.setEnableSpeakerphone(shouldBeOnSpeaker);
-        await engine.current.muteLocalAudioStream(false);
-
-        if (callSession?.type === 'video') {
-          await engine.current.enableVideo();
-          await engine.current.startPreview();
+        // 1. Hardware Trigger & Parameters (OpenSL is crucial for Android performance)
+        // ✅ Start InCallManager for both platforms on video calls for proper audio session
+        if (Platform.OS === 'ios') {
+          InCallManager.start({ media: isVideoCall ? 'video' : 'audio' });
+        } else if (isVideoCall) {
+          // Android: Start InCallManager for video calls to properly claim audio focus
+          InCallManager.start({ media: 'video' });
+          InCallManager.setSpeakerphoneOn(true);
         }
+        await engine.current.setParameters('{"che.audio.opensl":true}');
+        await engine.current.setParameters('{"che.audio.android.opensl":true}');
 
         await engine.current.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
+        await engine.current.enableAudio();
 
-        console.log('✅ [Agora] Engine Ready');
+        // ✅ FIX 1: AudioScenarioChatRoom for video calls.
+        // AudioScenarioMeeting applies aggressive noise cancellation that
+        // incorrectly classifies voice as noise ~1s after video starts, killing audio.
+        await engine.current.setAudioProfile(
+          AudioProfileType.AudioProfileSpeechStandard,
+          isVideoCall
+            ? AudioScenarioType.AudioScenarioChatroom  // ✅ Safe for video
+            : AudioScenarioType.AudioScenarioMeeting   // ✅ Fine for audio-only
+        );
+
+        console.log('✅ [Agora] Basic Modules Enabled');
+
+        // 🔊 Volume — video calls use max values (400), audio calls use moderate boost
+        // adjustRecordingSignalVolume: microphone gain  (0–400, default 100)
+        // adjustPlaybackSignalVolume: speaker/earpiece  (0–400, default 100)
+        await engine.current.adjustRecordingSignalVolume(isVideoCall ? 200 : 150);
+        await engine.current.adjustPlaybackSignalVolume(isVideoCall ? 400 : 150);
+
+        // ✅ FIX 2: DO NOT set speakerphone here before joining.
+        // enableVideo() resets OS audio routing. Speaker must be set in onJoinChannelSuccess.
+        // For audio calls only: earpiece is the default, no action needed here.
+
+        // ✅ FIX 3: Enable video module but do NOT startPreview() yet.
+        // startPreview() before joinChannel causes camera-audio thread conflicts.
+        // It is now called safely inside onJoinChannelSuccess.
+        if (isVideoCall) {
+          await engine.current.enableVideo();
+          // ⚠️ startPreview() moved to onJoinChannelSuccess
+        }
+
+        // Manual Enable & Unmute
+        await engine.current.enableLocalAudio(true);
+        await engine.current.muteLocalAudioStream(false);
+        await engine.current.muteAllRemoteAudioStreams(false);
+        // ✅ FIX 4: reportVad=false — VAD (Voice Activity Detection) can incorrectly
+        // suppress audio in video calls when camera noise triggers false silence detection.
+        await engine.current.enableAudioVolumeIndication(250, 3, false);
+
+        console.log(`✅ [Agora] Engine Ready and Parameters Set`);
         setIsEngineReady(true);
 
         // Start ringback if we're the caller and engine is ready
@@ -248,8 +316,12 @@ const ActiveCallScreen = () => {
     }
 
     return () => {
+      console.log('🧹 [Agora/InCallManager] Releasing Lifecycle');
+      try {
+        InCallManager.stop();
+      } catch (e) { }
+
       if (engine.current) {
-        console.log('🧹 [Agora] Releasing Engine Lifecycle');
         stopRingback();
         engine.current.leaveChannel();
         engine.current.release();
@@ -260,17 +332,12 @@ const ActiveCallScreen = () => {
     };
   }, [appId]); // Only depend on appId
 
-  // 4. Join Channel (When token and engine are ready)
   useEffect(() => {
     const join = async () => {
       const isAudioReady = Platform.OS === 'android' ? true : isAudioActivated;
 
       if (isEngineReady && engine.current && token && appId && localUid && !isJoined && isAudioReady) {
-        // Check if callSession and channelName are valid before logging/joining
-        if (!callSession || !callSession.channelName) {
-          console.log('⏳ [Agora] Waiting for channelName to be available in session...', callSession);
-          return;
-        }
+        if (!callSession || !callSession.channelName) return;
 
         console.log(`🚀 [Agora] Attempting to Join: ${callSession.channelName} | UID: ${localUid}`);
         try {
@@ -309,11 +376,12 @@ const ActiveCallScreen = () => {
   };
 
   const toggleSpeaker = () => {
+    const nextState = !isSpeakerOn;
+    InCallManager.setForceSpeakerphoneOn(nextState);
     if (engine.current) {
-      const nextState = !isSpeakerOn;
       engine.current.setEnableSpeakerphone(nextState);
-      setIsSpeakerOn(nextState);
     }
+    setIsSpeakerOn(nextState);
   };
 
   const switchCamera = () => {

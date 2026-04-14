@@ -20,6 +20,11 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               // Packages that cannot be autolinked yet can be added manually here, for example:
               // add(MyReactNativePackage())
+              try {
+                  add(com.margelo.nitro.NitroModulesPackage())
+              } catch (e: Exception) {
+                  // If already registered by autolinking, ignore
+              }
             }
 
         override fun getJSMainModuleName(): String = "index"

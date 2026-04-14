@@ -10,15 +10,15 @@ import {Platform} from 'react-native';
 // BASE URL CONFIGURATION
 // ============================================
 
-const USE_LOCAL_SERVER = true; // Set to false for production
+const USE_LOCAL_SERVER = true; // Set to false to use Render
 
-const PRODUCTION_URL = 'https://your-production-url.com';
+const PRODUCTION_URL = 'https://connect.flybook.com.bd';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://10.76.107.191:10000', // Updated local IP address
-  ios: 'http://localhost:10000',
-  default: 'http://localhost:10000',
+  android: 'http://192.168.1.192:10000', // Updated local IP address
+  ios: 'http://192.168.1.192:10000',
+  default: 'http://192.168.1.192:10000',
 });
 
 export const BASE_URL = USE_LOCAL_SERVER ? LOCAL_URL : PRODUCTION_URL;
@@ -121,7 +121,14 @@ export const getInbox = async () => {
   return get('/api/v1/chats/inbox');
 };
 
-export const declineCallAPI = async (data: {callId: string; callerId: string}) => {
+export const getCallHistory = async (page = 1, limit = 20) => {
+  return get(`/api/v1/calls/history?page=${page}&limit=${limit}`);
+};
+
+export const declineCallAPI = async (data: {
+  callId: string;
+  callerId: string;
+}) => {
   return post('/api/v1/calls/decline', data);
 };
 

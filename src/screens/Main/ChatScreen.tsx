@@ -25,12 +25,13 @@ import Video from 'react-native-video';
 import ImageView from 'react-native-image-viewing';
 import RNBlobUtil from 'react-native-blob-util';
 import { getOrCreateConversation, getChatMessages, get } from '../../services/api';
-import SocketService from '../../services/SocketService';
+import { useSocket } from '../../context/SocketContext';
 import { useProfile } from '../../context/ProfileContext';
 import StorageService from '../../services/StorageService';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MediaService, { PickedMedia } from '../../services/MediaService';
 import { useCall } from '../../context/CallContext';
+import { useInbox } from '../../context/InboxContext';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -73,16 +74,38 @@ function formatBytes(bytes: number): string {
 
 function formatLastSeen(date: string | Date | undefined): string {
     if (!date) return '';
-    const lastSeen = new Date(date);
-    const now = new Date();
-    const diffInSeconds = Math.floor((now.getTime() - lastSeen.getTime()) / 1000);
+    try {
+        const lastSeen = new Date(date);
+        if (isNaN(lastSeen.getTime())) return '';
+        const now = new Date();
+        const diffInSeconds = Math.floor((now.getTime() - lastSeen.getTime()) / 1000);
 
-    if (diffInSeconds < 60) return 'Just now';
-    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+        if (diffInSeconds < 60) return 'Just now';
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
 
-    // For older dates
-    return lastSeen.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        // Manual format to avoid toLocaleDateString crash in some environments
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const month = months[lastSeen.getMonth()];
+        const day = lastSeen.getDate();
+        const hours = lastSeen.getHours().toString().padStart(2, '0');
+        const mins = lastSeen.getMinutes().toString().padStart(2, '0');
+        return `${month} ${day}, ${hours}:${mins}`;
+    } catch (e) {
+        return '';
+    }
+}
+
+function formatSafeTime(dateStr: string | Date): string {
+    try {
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) return '--:--';
+        const hours = date.getHours().toString().padStart(2, '0');
+        const mins = date.getMinutes().toString().padStart(2, '0');
+        return `${hours}:${mins}`;
+    } catch (e) {
+        return '--:--';
+    }
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -90,9 +113,14 @@ function formatLastSeen(date: string | Date | undefined): string {
 const EMOJIS = ['❤️', '😂', '😮', '😢', '😡', '👍', '🙌'];
 
 const ChatScreen = ({ route, navigation }: any) => {
-    const { user: otherUser } = route.params;
+    const { user: initialUser, userId: deepLinkedUserId } = route.params || {};
+    const [otherUser, setOtherUser] = useState<any>(initialUser);
+    const [loadingUser, setLoadingUser] = useState(!initialUser && !!deepLinkedUserId);
+
     const { user: currentUser } = useProfile();
     const { initiateCall } = useCall();
+    const { clearUnreadLocally } = useInbox();
+    const { socket } = useSocket();
 
     const [messages, setMessages] = useState<any[]>([]);
     const [conversationId, setConversationId] = useState<string | null>(null);
@@ -110,8 +138,8 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     // User status
     const [userStatus, setUserStatus] = useState({
-        isOnline: otherUser.isOnline || false,
-        lastSeen: otherUser.lastSeen || null
+        isOnline: otherUser?.isOnline || false,
+        lastSeen: otherUser?.lastSeen || null
     });
 
     // File download tracking: messageId → 'downloading' | 'done'
@@ -131,13 +159,21 @@ const ChatScreen = ({ route, navigation }: any) => {
     const [viewerVisible, setViewerVisible] = useState(false);
     const [viewerImage, setViewerImage] = useState<string | null>(null);
     const [isDownloadingImage, setIsDownloadingImage] = useState(false);
+    const [typingUser, setTypingUser] = useState<string | null>(null);
 
     // Typing status
     const [isPartnerTyping, setIsPartnerTyping] = useState(false);
     const typingTimeoutRef = useRef<any>(null);
 
-    // Audio recording
-    const audioRecorderPlayer = useRef<any>(AudioRecorderPlayer).current;
+    // ── Audio recording (Lazy Init) ──
+    const getRecorder = () => {
+        try {
+            return AudioRecorderPlayer;
+        } catch (e) {
+            console.error('Safe-Init: AudioRecorderPlayer failed:', e);
+            return null;
+        }
+    };
     const [isRecording, setIsRecording] = useState(false);
     const [recordTime, setRecordTime] = useState('00:00');
     const [recordSecs, setRecordSecs] = useState(0);
@@ -148,11 +184,54 @@ const ChatScreen = ({ route, navigation }: any) => {
         duration: number;
     }>>({});
 
-    const otherUserId = (otherUser as any)?._id || (otherUser as any)?.id;
+    const otherUserId = (otherUser as any)?._id || (otherUser as any)?.id || deepLinkedUserId;
     const currentUserId = (currentUser as any)?._id || (currentUser as any)?.id;
 
     const flatListRef = useRef<FlatList>(null);
     const progressAnim = useRef(new Animated.Value(0)).current;
+    
+    // Safety guard
+    const isMounted = useRef(true);
+
+    useEffect(() => {
+        isMounted.current = true;
+        return () => {
+            isMounted.current = false;
+        };
+    }, []);
+
+    // ── Handle Deep Linking (if only userId is provided) ───────────────────
+    useEffect(() => {
+        const fetchUserData = async () => {
+            if (!otherUser && deepLinkedUserId) {
+                setLoadingUser(true);
+                try {
+                    const response = await get<any>(`/api/v1/users/${deepLinkedUserId}`);
+                    if (isMounted.current) {
+                        if (response?.user) {
+                            setOtherUser(response.user);
+                            setUserStatus({
+                                isOnline: response.user.isOnline || false,
+                                lastSeen: response.user.lastSeen || null
+                            });
+                        } else {
+                            Alert.alert('Error', 'User not found or deleted.');
+                            navigation.goBack();
+                        }
+                    }
+                } catch (error) {
+                    if (isMounted.current) {
+                        console.error('❌ Failed to fetch deep linked user:', error);
+                        Alert.alert('Error', 'Could not load user details.');
+                        navigation.goBack();
+                    }
+                } finally {
+                    if (isMounted.current) setLoadingUser(false);
+                }
+            }
+        };
+        fetchUserData();
+    }, [deepLinkedUserId]);
 
     // ── Init ──────────────────────────────────────────────────────────────────
 
@@ -162,24 +241,25 @@ const ChatScreen = ({ route, navigation }: any) => {
                 if (!otherUserId) return;
                 // 1. Get/Create Conversation
                 const response = await getOrCreateConversation(otherUserId);
-                if (response.success) {
-                    setConversationId(response.data._id);
+                if (!isMounted.current) return;
 
-                    // NEW: Load cache BEFORE fetching
-                    const cached = await StorageService.getMessages(response.data._id);
-                    if (cached.length > 0) {
+                if (response.success && response.data?._id) {
+                    const cId = response.data._id;
+                    setConversationId(cId);
+
+                    // Load cache BEFORE fetching
+                    const cached = await StorageService.getMessages(cId);
+                    if (isMounted.current && cached && Array.isArray(cached) && cached.length > 0) {
                         setMessages(cached);
                         setLoading(false);
                     }
 
-                    loadMessages(response.data._id, 1);
+                    loadMessages(cId, 1);
                 }
 
-                // 2. Fetch latest status of the other user directly from API
-                // This ensures we have the current status even if we missed a socket event
+                // 2. Fetch latest status
                 const userResponse = await get<any>(`/api/v1/users/${otherUserId}`);
-                if (userResponse.success && userResponse.user) {
-                    console.log(`ℹ️ Initial status for ${otherUser.name}:`, userResponse.user.isOnline ? 'Online' : 'Offline');
+                if (isMounted.current && userResponse?.success && userResponse?.user) {
                     setUserStatus({
                         isOnline: userResponse.user.isOnline,
                         lastSeen: userResponse.user.lastSeen
@@ -190,144 +270,145 @@ const ChatScreen = ({ route, navigation }: any) => {
             }
         };
         initChat();
+    }, [otherUserId]);
 
-        SocketService.on('receive_message', (newMessage: any) => {
-            if (newMessage.conversationId === conversationId) {
+    useEffect(() => {
+        if (!socket || !otherUserId || !currentUserId) return;
+
+        const handleReceiveMessage = (newMessage: any) => {
+            if (!newMessage || !isMounted.current) return;
+            const convId = newMessage.conversationId?._id || newMessage.conversationId;
+            const incomingCid = convId?.toString();
+            
+            if (incomingCid === conversationId) {
                 setMessages(prev => {
-                    // Check if message already exists (e.g. from optimistic update)
-                    const existingIndex = prev.findIndex(m => m._id === newMessage._id);
+                    if (!Array.isArray(prev)) return [newMessage];
+                    const existingIndex = prev.findIndex(m => m?._id === newMessage._id);
                     if (existingIndex > -1) return prev;
-
-                    // If it's a message from ME, try to find the matching 'temp' message and replace it
+                    
                     if (newMessage.senderId?._id?.toString() === currentUserId?.toString()) {
-                        const tempIndex = prev.findIndex(m =>
-                            m._id.toString().startsWith('temp-') &&
-                            m.content === newMessage.content
-                        );
+                        const tempIndex = prev.findIndex(m => m?._id?.toString().startsWith('temp-') && m.content === newMessage.content);
                         if (tempIndex > -1) {
                             const newMessages = [...prev];
                             newMessages[tempIndex] = newMessage;
-                            StorageService.saveMessages(conversationId!, newMessages); // Save after optimistic replacement
+                            StorageService.saveMessages(conversationId!, newMessages);
                             return newMessages;
                         }
                     }
-
-                    // Otherwise, just prepend
                     const updated = [newMessage, ...prev];
-                    StorageService.saveMessages(conversationId!, updated);
+                    if (conversationId) StorageService.saveMessages(conversationId, updated);
                     return updated;
                 });
             }
-        });
+        };
 
-        // Use status listener
-        SocketService.on('user_status_change', (data: any) => {
-            console.log('📡 user_status_change received:', data);
+        const handleStatusChange = (data: any) => {
+            if (!isMounted.current) return;
             if (data.userId?.toString() === otherUserId?.toString()) {
-                setUserStatus({
-                    isOnline: data.isOnline,
-                    lastSeen: data.lastSeen
-                });
+                setUserStatus({ isOnline: data.isOnline, lastSeen: data.lastSeen });
             }
-        });
+        };
 
-        // Typing listener
-        SocketService.on('user_typing', (data: any) => {
+        const handleTyping = (data: any) => {
             if (data.conversationId === conversationId && data.userId?.toString() === otherUserId?.toString()) {
                 setIsPartnerTyping(data.isTyping);
             }
-        });
+        };
 
-        // Messages seen listener
-        SocketService.on('messages_seen', (data: any) => {
+        const handleSeen = (data: any) => {
             if (data.conversationId === conversationId && data.seenBy?.toString() === otherUserId?.toString()) {
                 setMessages(prev => {
-                    const updatedMessages = prev.map(msg =>
-                        (msg as any).senderId?.toString() === currentUserId?.toString() && msg.status !== 'read'
-                            ? { ...msg, status: 'read' }
-                            : msg
-                    );
+                    const otherUserIdStr = otherUserId?.toString();
+                    const currentUserIdStr = currentUserId?.toString();
+                    const isOwnMessage = (msg: any) => (msg.senderId?._id || msg.senderId)?.toString() === currentUserIdStr;
+
+                    const updatedMessages = prev.map(msg => (isOwnMessage(msg) && msg.status !== 'read' ? { ...msg, status: 'read' } : msg));
                     StorageService.saveMessages(conversationId!, updatedMessages);
                     return updatedMessages;
                 });
             }
-        });
+        };
 
-        // Message Edited listener
-        SocketService.on('message_edited', (data: any) => {
+        const handleEdited = (data: any) => {
             if (data.conversationId === conversationId) {
                 setMessages(prev => {
-                    const updatedMessages = prev.map(msg =>
-                        (msg as any)._id === data.messageId
-                            ? { ...msg, content: data.newContent, isEdited: true }
-                            : msg
-                    );
+                    const updatedMessages = prev.map(msg => (msg as any)._id === data.messageId ? { ...msg, content: data.newContent, isEdited: true } : msg);
                     StorageService.saveMessages(conversationId!, updatedMessages);
                     return updatedMessages;
                 });
             }
-        });
+        };
 
-        // Message Deleted listener
-        SocketService.on('message_deleted', (data: any) => {
+        const handleDeleted = (data: any) => {
             if (data.conversationId === conversationId) {
                 setMessages(prev => {
-                    const updatedMessages = prev.map(msg =>
-                        (msg as any)._id === data.messageId
-                            ? { ...msg, content: 'This message was deleted', isDeleted: true, mediaUrl: null, thumbnailUrl: null }
-                            : msg
-                    );
+                    const updatedMessages = prev.map(msg => (msg as any)._id === data.messageId ? { ...msg, content: 'This message was deleted', isDeleted: true, mediaUrl: null, thumbnailUrl: null } : msg);
                     StorageService.saveMessages(conversationId!, updatedMessages);
                     return updatedMessages;
                 });
             }
-        });
+        };
 
-        // Message Reaction listener
-        SocketService.on('message_reaction_updated', (data: any) => {
+        const handleReaction = (data: any) => {
             if (data.conversationId === conversationId) {
                 setMessages(prev => {
-                    const updatedMessages = prev.map(msg =>
-                        (msg as any)._id === data.messageId
-                            ? { ...msg, reactions: data.reactions }
-                            : msg
-                    );
+                    const updatedMessages = prev.map(msg => (msg as any)._id === data.messageId ? { ...msg, reactions: data.reactions } : msg);
                     StorageService.saveMessages(conversationId!, updatedMessages);
                     return updatedMessages;
                 });
             }
-        });
+        };
+
+        socket.on('receive_message', handleReceiveMessage);
+        socket.on('user_status_change', handleStatusChange);
+        socket.on('user_typing', handleTyping);
+        socket.on('messages_seen', handleSeen);
+        socket.on('message_edited', handleEdited);
+        socket.on('message_deleted', handleDeleted);
+        socket.on('message_reaction_updated', handleReaction);
 
         return () => {
-            SocketService.off('receive_message');
-            SocketService.off('user_status_change');
-            SocketService.off('user_typing');
-            SocketService.off('messages_seen');
-            SocketService.off('message_edited');
-            SocketService.off('message_deleted');
-            SocketService.off('message_reaction_updated');
+            socket.off('receive_message', handleReceiveMessage);
+            socket.off('user_status_change', handleStatusChange);
+            socket.off('user_typing', handleTyping);
+            socket.off('messages_seen', handleSeen);
+            socket.off('message_edited', handleEdited);
+            socket.off('message_deleted', handleDeleted);
+            socket.off('message_reaction_updated', handleReaction);
         };
-    }, [otherUserId, conversationId, currentUserId]);
+    }, [socket, otherUserId, conversationId, currentUserId]);
 
     // Cleanup audio
     useEffect(() => {
         return () => {
-            audioRecorderPlayer.stopPlayer();
-            audioRecorderPlayer.removePlayBackListener();
-            audioRecorderPlayer.stopRecorder();
-            audioRecorderPlayer.removeRecordBackListener();
+            try {
+            const recorder = getRecorder();
+            if (recorder) {
+                try {
+                    recorder.stopPlayer();
+                    recorder.removePlayBackListener();
+                    recorder.stopRecorder();
+                    recorder.removeRecordBackListener();
+                } catch (e) {
+                    console.error('Cleanup: Recorder error ignored:', e);
+                }
+            }
+            } catch (e) {
+                console.log('Cleanup suppressed:', e);
+            }
         };
     }, []);
 
     // Send mark_as_read when entering or receiving messages
     useEffect(() => {
         if (conversationId) {
-            SocketService.emit('mark_as_read', {
+            socket.emit('mark_as_read', {
                 conversationId,
                 senderId: otherUserId // We represent the person whose messages were seen
             });
+            clearUnreadLocally(conversationId);
         }
-    }, [conversationId, messages[0]?._id, otherUserId]);
+    }, [conversationId, messages[0]?._id, otherUserId, clearUnreadLocally]);
 
     // Animate progress bar
     useEffect(() => {
@@ -343,20 +424,28 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const loadMessages = async (id: string, pageNum: number) => {
         try {
+            if (!id) return;
             const response = await getChatMessages(id, pageNum);
-            if (response.success) {
+            if (!isMounted.current) return;
+
+            if (response.success && Array.isArray(response.data)) {
                 if (pageNum === 1) {
                     setMessages(response.data);
                     StorageService.saveMessages(id, response.data);
                 } else {
-                    setMessages(prev => [...prev, ...response.data]);
+                    setMessages(prev => {
+                        const newMsgs = [...prev, ...response.data];
+                        // Deduplicate
+                        const unique = Array.from(new Map(newMsgs.map(m => [m._id, m])).values());
+                        return unique;
+                    });
                 }
-                setHasMore(response.pagination.hasMore);
+                setHasMore(response.pagination?.hasMore ?? response.data.length === 20);
             }
         } catch (error) {
             console.error('Load Messages Error:', error);
         } finally {
-            setLoading(false);
+            if (isMounted.current) setLoading(false);
         }
     };
 
@@ -392,7 +481,7 @@ const ChatScreen = ({ route, navigation }: any) => {
         if (!msgId) return;
 
         // Emit reaction
-        SocketService.emit('message_reaction', {
+        socket.emit('message_reaction', {
             messageId: msgId,
             conversationId,
             receiverId: otherUserId,
@@ -431,7 +520,7 @@ const ChatScreen = ({ route, navigation }: any) => {
         const msgId = (selectedMessage as any)?._id;
         if (!msgId) return;
 
-        SocketService.emit('delete_message', {
+        socket.emit('delete_message', {
             messageId: msgId,
             conversationId,
             receiverId: otherUserId
@@ -483,7 +572,7 @@ const ChatScreen = ({ route, navigation }: any) => {
             const msgId = (editingMessage as any)?._id;
             if (!msgId) return;
 
-            SocketService.emit('edit_message', {
+            socket.emit('edit_message', {
                 messageId: msgId,
                 conversationId,
                 receiverId: otherUserId,
@@ -529,7 +618,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                 createdAt: new Date().toISOString(),
                 replyTo: replyingToMessage ? {
                     ...replyingToMessage,
-                    senderId: replyingToMessage.senderId || { name: otherUser.name }
+                    senderId: replyingToMessage.senderId || { name: otherUser?.name }
                 } : null,
             };
             setMessages(prev => {
@@ -567,7 +656,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                     ),
                 );
 
-                SocketService.emit('send_message', {
+                socket.emit('send_message', {
                     conversationId,
                     receiverId: otherUserId,
                     content: optimisticMsg.content,
@@ -599,7 +688,7 @@ const ChatScreen = ({ route, navigation }: any) => {
             contentType: 'text',
             replyTo: replyingToMessage?._id,
         };
-        SocketService.emit('send_message', messageData);
+        socket.emit('send_message', messageData);
         setMessages(prev => {
             const updated = [
                 {
@@ -608,7 +697,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                     senderId: currentUserId,
                     replyTo: replyingToMessage ? {
                         ...replyingToMessage,
-                        senderId: replyingToMessage.senderId || { name: otherUser.name }
+                        senderId: replyingToMessage.senderId || { name: otherUser?.name }
                     } : null,
                     createdAt: new Date().toISOString(),
                 },
@@ -619,7 +708,7 @@ const ChatScreen = ({ route, navigation }: any) => {
         });
         setInputText('');
         setReplyingToMessage(null);
-    }, [conversationId, inputText, pendingMedia, otherUserId, currentUser, editingMessage, replyingToMessage, currentUserId, otherUser.name]);
+    }, [conversationId, inputText, pendingMedia, otherUserId, currentUser, editingMessage, replyingToMessage, currentUserId, otherUser?.name]);
 
     const handleSendVoice = async (uri: string, duration: number) => {
         if (!conversationId) return;
@@ -649,7 +738,7 @@ const ChatScreen = ({ route, navigation }: any) => {
             createdAt: new Date().toISOString(),
             replyTo: replyingToMessage ? {
                 ...replyingToMessage,
-                senderId: replyingToMessage.senderId || { name: otherUser.name }
+                senderId: replyingToMessage.senderId || { name: otherUser?.name }
             } : null,
         };
 
@@ -681,7 +770,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                 ),
             );
 
-            SocketService.emit('send_message', {
+            socket.emit('send_message', {
                 conversationId,
                 receiverId: otherUserId,
                 content: 'Sent a voice message',
@@ -725,9 +814,11 @@ const ChatScreen = ({ route, navigation }: any) => {
             setRecordTime('00:00');
             setIsRecording(true);
 
-            const result = await audioRecorderPlayer.startRecorder(path);
-            audioRecorderPlayer.addRecordBackListener((e: any) => {
-                setRecordTime(audioRecorderPlayer.mmssss(Math.floor(e.currentPosition)));
+            const recorder = getRecorder();
+            if (!recorder) return;
+            const result = await recorder.startRecorder(path);
+            recorder.addRecordBackListener((e: any) => {
+                setRecordTime(recorder.mmssss(Math.floor(e.currentPosition)));
                 setRecordSecs(Math.floor(e.currentPosition / 1000));
             });
             console.log('Recording started:', result);
@@ -739,8 +830,10 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const onStopRecord = async () => {
         try {
-            const result = await audioRecorderPlayer.stopRecorder();
-            audioRecorderPlayer.removeRecordBackListener();
+            const recorder = getRecorder();
+            if (!recorder) return;
+            const result = await recorder.stopRecorder();
+            recorder.removeRecordBackListener();
             setIsRecording(false);
             setRecordTime('00:00');
 
@@ -808,7 +901,7 @@ const ChatScreen = ({ route, navigation }: any) => {
     const onStartPlay = async (msgId: string, url: string) => {
         try {
             if (lastPlayedId && lastPlayedId !== msgId) {
-                await audioRecorderPlayer.stopPlayer();
+                await getRecorder()?.stopPlayer();
                 setAudioStatus(prev => ({
                     ...prev,
                     [lastPlayedId]: { ...prev[lastPlayedId], isPlaying: false }
@@ -818,8 +911,10 @@ const ChatScreen = ({ route, navigation }: any) => {
             setLastPlayedId(msgId);
             const msgUrl = url.startsWith('file://') ? url : url;
 
-            await audioRecorderPlayer.startPlayer(msgUrl);
-            audioRecorderPlayer.addPlayBackListener((e: any) => {
+            const recorder = getRecorder();
+            if (!recorder) return;
+            await recorder.startPlayer(msgUrl);
+            recorder.addPlayBackListener((e: any) => {
                 setAudioStatus(prev => ({
                     ...prev,
                     [msgId]: {
@@ -830,7 +925,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                 }));
 
                 if (e.currentPosition === e.duration) {
-                    audioRecorderPlayer.stopPlayer();
+                    getRecorder()?.stopPlayer();
                     setAudioStatus(prev => ({
                         ...prev,
                         [msgId]: { ...prev[msgId], isPlaying: false, currentPosition: 0 }
@@ -844,7 +939,7 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const onPausePlay = async (msgId: string) => {
         try {
-            await audioRecorderPlayer.pausePlayer();
+            await getRecorder()?.pausePlayer();
             setAudioStatus(prev => ({
                 ...prev,
                 [msgId]: { ...prev[msgId], isPlaying: false }
@@ -856,8 +951,11 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const onStopPlay = async (msgId: string) => {
         try {
-            await audioRecorderPlayer.stopPlayer();
-            audioRecorderPlayer.removePlayBackListener();
+            const recorder = getRecorder();
+            if (recorder) {
+                await recorder.stopPlayer();
+                recorder.removePlayBackListener();
+            }
             setAudioStatus(prev => ({
                 ...prev,
                 [msgId]: { ...prev[msgId], isPlaying: false, currentPosition: 0 }
@@ -976,8 +1074,9 @@ const ChatScreen = ({ route, navigation }: any) => {
         const isUploading = item.uploading === true;
         const progress = item.uploadProgress ?? 0;
 
-        const currentPosStr = audioRecorderPlayer.mmssss(Math.floor(status.currentPosition));
-        const durationStr = audioRecorderPlayer.mmssss(Math.floor(status.duration));
+        const recorder = getRecorder();
+        const currentPosStr = recorder?.mmssss(Math.floor(status.currentPosition)) || '00:00';
+        const durationStr = recorder?.mmssss(Math.floor(status.duration)) || '00:00';
 
         const playProgress = status.duration > 0 ? (status.currentPosition / status.duration) * 100 : 0;
 
@@ -1016,6 +1115,72 @@ const ChatScreen = ({ route, navigation }: any) => {
         );
     };
 
+    const renderCallLogBubble = (item: any, isMe: boolean) => {
+        const isMissed = item.content?.includes('MISSED');
+        const isCancelled = item.content?.includes('CANCELLED');
+        const isDeclined = item.content?.includes('DECLINED');
+        const isVideo = item.content?.includes('Video');
+        const duration = item.metadata?.duration;
+
+        let statusTitle = '';
+        let statusIcon = isVideo ? 'videocam' : 'call';
+        let iconColor = '#6B7280';
+        let circleBg = '#F3F4F6';
+
+        if (isMissed) {
+            statusTitle = isMe ? 'No answer' : 'Missed call';
+            iconColor = isMe ? '#6B7280' : '#EF4444';
+            circleBg = isMe ? '#F3F4F6' : '#FEE2E2';
+            statusIcon = isMe ? (isVideo ? 'videocam-outline' : 'call-outline') : (isVideo ? 'videocam' : 'call');
+        } else if (isCancelled || isDeclined) {
+            statusTitle = isMe ? 'Cancelled call' : 'Declined call';
+            statusIcon = isVideo ? 'videocam-off-outline' : 'call-outline';
+        } else {
+            statusTitle = isMe ? 'Outgoing call' : 'Incoming call';
+            statusIcon = isMe
+                ? (isVideo ? 'arrow-redo-outline' : 'arrow-up-outline')
+                : (isVideo ? 'arrow-undo-outline' : 'arrow-down-outline');
+            if (isMe) iconColor = '#6366F1';
+            else iconColor = '#10B981';
+        }
+
+        return (
+            <View style={[styles.callLogBubble, isMissed && !isMe && styles.callLogMissed]}>
+                <View style={[styles.callLogIconContainer, { backgroundColor: circleBg }]}>
+                    <Icon name={statusIcon as any} size={22} color={iconColor} />
+                </View>
+
+                <View style={styles.callLogInfo}>
+                    <Text style={[styles.callLogTitle, isMissed && !isMe && { color: '#EF4444' }]}>
+                        {statusTitle}
+                    </Text>
+                    <View style={styles.callLogMetaRow}>
+                        <Text style={styles.callLogTypeLabel}>
+                            {isVideo ? 'Video' : 'Audio'}
+                        </Text>
+                        {duration > 0 && (
+                            <>
+                                <View style={styles.callLogDot} />
+                                <Text style={styles.callLogDuration}>
+                                    {Math.floor(duration / 60)}m {duration % 60}s
+                                </Text>
+                            </>
+                        )}
+                    </View>
+                </View>
+
+                <View style={styles.callLogDivider} />
+
+                <TouchableOpacity
+                    style={styles.callLogCallbackBtn}
+                    onPress={() => initiateCall(otherUserId, isVideo ? 'video' : 'audio', otherUser?.name, otherUser?.profileImage)}
+                >
+                    <Icon name={isVideo ? "videocam" : "call"} size={18} color="#6366F1" />
+                </TouchableOpacity>
+            </View>
+        );
+    };
+
     // ── Render message ────────────────────────────────────────────────────────
 
     const renderMessage = ({ item }: { item: any }) => {
@@ -1027,11 +1192,9 @@ const ChatScreen = ({ route, navigation }: any) => {
             currentUser?.id ||
             (currentUser as any)?._id ||
             (currentUser as any)?.id;
-        const isMe = !!(
-            senderId &&
-            currentUserId &&
-            senderId.toString() === currentUserId.toString()
-        );
+        const senderIdStr = senderId ? senderId.toString() : null;
+        const currentIdStr = currentUserId ? currentUserId.toString() : null;
+        const isMe = !!(senderIdStr && currentIdStr && senderIdStr === currentIdStr);
 
         const imgSrc = resolveImageSource(item);
         const isUploading = item.uploading === true;
@@ -1057,6 +1220,17 @@ const ChatScreen = ({ route, navigation }: any) => {
             );
         };
 
+        if (item.contentType === 'call_log') {
+            return (
+                <View style={styles.callLogWrapper}>
+                    {renderCallLogBubble(item, isMe)}
+                    <Text style={styles.callLogTimestamp}>
+                        {formatSafeTime(item.createdAt)}
+                    </Text>
+                </View>
+            );
+        }
+
         return (
             <TouchableOpacity
                 onLongPress={() => handleMessageActions(item)}
@@ -1072,7 +1246,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                 ]}>
                 {renderQuotedMessage(item.replyTo, isMe)}
                 {!isMe && (
-                    <Text style={styles.senderNameLabel}>{otherUser.name}</Text>
+                    <Text style={styles.senderNameLabel}>{otherUser?.name}</Text>
                 )}
 
                 {/* ── File ── */}
@@ -1080,6 +1254,7 @@ const ChatScreen = ({ route, navigation }: any) => {
 
                 {/* ── Audio ── */}
                 {item.contentType === 'audio' && renderAudioBubble(item, isMe)}
+
 
                 {/* ── Image ── */}
                 {item.contentType === 'image' && (
@@ -1184,10 +1359,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                             isMe ? styles.myTimestamp : styles.theirTimestamp,
                             item.contentType === 'file' && styles.fileTimestamp,
                         ]}>
-                        {new Date(item.createdAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                        })}
+                        {formatSafeTime(item.createdAt)}
                     </Text>
 
                     {isMe && !isUploading && (
@@ -1372,7 +1544,31 @@ const ChatScreen = ({ route, navigation }: any) => {
             )
             : null;
 
-    // ── Render ────────────────────────────────────────────────────────────────
+    // ── Pre-render check: if we're still loading, show a loader ────────────────
+    if (loadingUser) {
+        return (
+            <View style={[styles.centerContainer, { backgroundColor: '#F8FAFC', flex: 1, justifyContent: 'center', alignItems: 'center' }]}>
+                <ActivityIndicator size="large" color="#6366F1" />
+                <Text style={{ marginTop: 10, color: '#64748B' }}>Connecting to Chat...</Text>
+            </View>
+        );
+    }
+
+    if (!otherUser && !loadingUser && !initialUser && !deepLinkedUserId) {
+        return (
+            <View style={[styles.centerContainer, { backgroundColor: '#F8FAFC', flex: 1, justifyContent: 'center', alignItems: 'center' }]}>
+                <Text style={{ color: '#EF4444' }}>Invalid Chat Parameters</Text>
+                <TouchableOpacity 
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.replace('Main')} 
+                    style={{ marginTop: 20, padding: 10, backgroundColor: '#6366F1', borderRadius: 8 }}
+                >
+                    <Text style={{ color: '#FFF' }}>Go Back</Text>
+                </TouchableOpacity>
+            </View>
+        );
+    }
+
+    if (!otherUser) return null; // Safe guard for TS but logic-wise otherUser is loaded here.
 
     return (
         <SafeAreaView style={styles.container}>
@@ -1381,26 +1577,36 @@ const ChatScreen = ({ route, navigation }: any) => {
             {/* ── Header ── */}
             <View style={styles.header}>
                 <TouchableOpacity
-                    onPress={() => navigation.goBack()}
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.replace('Main')}
                     style={styles.backButton}>
                     <Icon name="chevron-back" size={28} color="#111827" />
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.headerUser}>
+                <TouchableOpacity
+                    style={styles.headerUser}
+                    onPress={() => navigation.navigate('ChatDetail', {
+                        user: {
+                            ...otherUser,
+                            isOnline: userStatus.isOnline,
+                            lastSeen: userStatus.lastSeen
+                        },
+                        conversationId
+                    })}
+                >
                     <Image
-                        source={{ uri: otherUser.profileImage }}
+                        source={{ uri: otherUser?.profileImage }}
                         style={styles.headerAvatar as any}
                     />
                     <View>
-                        <Text style={styles.headerName}>{otherUser.name}</Text>
+                        <Text style={styles.headerName}>{otherUser?.name}</Text>
                         <Text style={[
                             styles.headerStatus,
                             (userStatus.isOnline || isPartnerTyping) && styles.statusOnline
                         ]}>
                             {isPartnerTyping
                                 ? 'typing...'
-                                : userStatus.isOnline
+                                : userStatus?.isOnline
                                     ? 'Online'
-                                    : userStatus.lastSeen
+                                    : userStatus?.lastSeen
                                         ? `Last seen: ${formatLastSeen(userStatus.lastSeen)}`
                                         : 'Offline'
                             }
@@ -1408,285 +1614,287 @@ const ChatScreen = ({ route, navigation }: any) => {
                     </View>
                 </TouchableOpacity>
                 <View style={styles.headerActions}>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={styles.iconButton}
-                        onPress={() => initiateCall(otherUserId, 'audio', otherUser.name, otherUser.profileImage)}
+                        onPress={() => initiateCall(otherUserId, 'audio', otherUser?.name, otherUser?.profileImage)}
                     >
                         <Icon name="call-outline" size={24} color="#6366F1" />
                     </TouchableOpacity>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={styles.iconButton}
-                        onPress={() => initiateCall(otherUserId, 'video', otherUser.name, otherUser.profileImage)}
+                        onPress={() => initiateCall(otherUserId, 'video', otherUser?.name, otherUser?.profileImage)}
                     >
                         <Icon name="videocam-outline" size={24} color="#6366F1" />
                     </TouchableOpacity>
                 </View>
             </View>
 
-            {/* ── Message List ── */}
-            {loading ? (
-                <View style={styles.centerContainer}>
-                    <ActivityIndicator size="large" color="#6366F1" />
-                </View>
-            ) : (
-                <FlatList
-                    ref={flatListRef}
-                    data={messages}
-                    keyExtractor={item => item._id}
-                    renderItem={renderMessage}
-                    inverted
-                    contentContainerStyle={styles.messageList}
-                    onEndReached={() =>
-                        hasMore && loadMessages(conversationId!, page + 1)
-                    }
-                    onEndReachedThreshold={0.5}
-                />
-            )}
-
-            {/* ── Input Area ── */}
-            {/* --- Editing UI --- */}
-            {editingMessage && (
-                <View style={styles.editingBar}>
-                    <View style={styles.editingInfo}>
-                        <Icon name="create-outline" size={16} color="#6366F1" />
-                        <Text style={styles.editingText} numberOfLines={1}>
-                            Editing: {editingMessage.content}
-                        </Text>
-                    </View>
-                    <TouchableOpacity onPress={() => {
-                        setEditingMessage(null);
-                        setInputText('');
-                    }}>
-                        <Icon name="close-circle" size={20} color="#9CA3AF" />
-                    </TouchableOpacity>
-                </View>
-            )}
-
-            {/* --- Replying UI --- */}
-            {replyingToMessage && (
-                <View style={styles.replyingBar}>
-                    <View style={styles.replyingInfo}>
-                        <Icon name="arrow-undo" size={16} color="#6366F1" />
-                        <View style={{ flex: 1, marginLeft: 8 }}>
-                            <Text style={styles.replyingToName}>
-                                Replying to {replyingToMessage.senderId?.name || otherUser.name}
-                            </Text>
-                            <Text style={styles.replyingText} numberOfLines={1}>
-                                {replyingToMessage.content}
-                            </Text>
-                        </View>
-                    </View>
-                    <TouchableOpacity onPress={() => setReplyingToMessage(null)}>
-                        <Icon name="close-circle" size={20} color="#9CA3AF" />
-                    </TouchableOpacity>
-                </View>
-            )}
-
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-                style={styles.inputContainer}>
+                style={styles.keyboardAvoidingStyle}>
 
-                {/* Preview Strip */}
-                {pendingMedia && (
-                    <View style={styles.previewStrip}>
-                        {/* Thumb / icon */}
-                        <View style={styles.previewThumbWrapper}>
-                            {previewType === 'file' && previewIcon ? (
-                                <View
-                                    style={[
-                                        styles.previewThumb,
-                                        {
-                                            backgroundColor:
-                                                previewIcon.color + '22',
-                                            justifyContent: 'center',
-                                            alignItems: 'center',
-                                        },
-                                    ]}>
-                                    <Icon
-                                        name={previewIcon.icon}
-                                        size={24}
-                                        color={previewIcon.color}
-                                    />
-                                </View>
-                            ) : previewType === 'image' ||
-                                pendingMedia.picked.thumbnailUri ? (
-                                <Image
-                                    source={{
-                                        uri:
-                                            previewType === 'video'
-                                                ? pendingMedia.picked
-                                                    .thumbnailUri
-                                                : pendingMedia.picked.localUri,
-                                    }}
-                                    style={styles.previewThumb}
-                                    resizeMode="cover"
-                                />
-                            ) : (
-                                <View
-                                    style={[
-                                        styles.previewThumb,
-                                        {
-                                            backgroundColor: '#F3F4F6',
-                                            justifyContent: 'center',
-                                            alignItems: 'center',
-                                        },
-                                    ]}>
-                                    <Icon
-                                        name="film-outline"
-                                        size={22}
-                                        color="#9CA3AF"
-                                    />
-                                </View>
-                            )}
-                            {previewType === 'video' && (
-                                <View style={styles.videoBadge}>
-                                    <Icon
-                                        name="videocam"
-                                        size={10}
-                                        color="#fff"
-                                    />
-                                </View>
-                            )}
+                {/* ── Message List ── */}
+                <View style={styles.messageListContainer}>
+                    {loading ? (
+                        <View style={styles.centerContainer}>
+                            <ActivityIndicator size="large" color="#6366F1" />
                         </View>
+                    ) : (
+                        <FlatList
+                            ref={flatListRef}
+                            data={messages}
+                            keyExtractor={item => item._id}
+                            renderItem={renderMessage}
+                            inverted
+                            contentContainerStyle={styles.messageList}
+                            onEndReached={() =>
+                                hasMore && conversationId && loadMessages(conversationId, page + 1)
+                            }
+                            onEndReachedThreshold={0.5}
+                        />
+                    )}
+                </View>
 
-                        {/* Info + progress */}
-                        <View style={styles.previewInfo}>
-                            <Text style={styles.previewFileName} numberOfLines={1}>
-                                {pendingMedia.picked.fileName}
-                            </Text>
-                            <Text style={styles.previewFileMeta}>
-                                {previewType === 'image'
-                                    ? 'Image'
-                                    : previewType === 'video'
-                                        ? 'Video'
-                                        : 'File'}{' '}
-                                · {formatBytes(pendingMedia.picked.fileSize)}
-                            </Text>
-                            {isUploading && (
-                                <View style={styles.previewProgressRow}>
-                                    <View style={styles.previewProgressTrack}>
-                                        <Animated.View
-                                            style={[
-                                                styles.previewProgressFill,
-                                                {
-                                                    width: progressAnim.interpolate(
-                                                        {
-                                                            inputRange: [0, 100],
-                                                            outputRange: [
-                                                                '0%',
-                                                                '100%',
-                                                            ],
-                                                        },
-                                                    ),
-                                                },
-                                            ]}
-                                        />
-                                    </View>
-                                    <Text style={styles.previewProgressPct}>
-                                        {pendingMedia.progress}%
+                {/* ── Input Area Group ── */}
+                <View style={styles.inputAreaContainer}>
+                    {/* --- Editing UI --- */}
+                    {editingMessage && (
+                        <View style={styles.editingBar}>
+                            <View style={styles.editingInfo}>
+                                <Icon name="create-outline" size={16} color="#6366F1" />
+                                <Text style={styles.editingText} numberOfLines={1}>
+                                    Editing: {editingMessage.content}
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => {
+                                setEditingMessage(null);
+                                setInputText('');
+                            }}>
+                                <Icon name="close-circle" size={20} color="#9CA3AF" />
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
+                    {/* --- Replying UI --- */}
+                    {replyingToMessage && (
+                        <View style={styles.replyingBar}>
+                            <View style={styles.replyingInfo}>
+                                <Icon name="arrow-undo" size={16} color="#6366F1" />
+                                <View style={{ flex: 1, marginLeft: 8 }}>
+                                    <Text style={styles.replyingToName}>
+                                        Replying to {replyingToMessage.senderId?.name || otherUser?.name}
+                                    </Text>
+                                    <Text style={styles.replyingText} numberOfLines={1}>
+                                        {replyingToMessage.content}
                                     </Text>
                                 </View>
-                            )}
+                            </View>
+                            <TouchableOpacity onPress={() => setReplyingToMessage(null)}>
+                                <Icon name="close-circle" size={20} color="#9CA3AF" />
+                            </TouchableOpacity>
                         </View>
+                    )}
 
-                        {!isUploading && (
+                    <View style={styles.inputContainer}>
+                        {/* Preview Strip (Now inside container) */}
+                        {pendingMedia && (
+                            <View style={styles.previewStrip}>
+                                <View style={styles.previewThumbWrapper}>
+                                    {previewType === 'file' && previewIcon ? (
+                                        <View
+                                            style={[
+                                                styles.previewThumb,
+                                                {
+                                                    backgroundColor:
+                                                        previewIcon.color + '22',
+                                                    justifyContent: 'center',
+                                                    alignItems: 'center',
+                                                },
+                                            ]}>
+                                            <Icon
+                                                name={previewIcon.icon}
+                                                size={24}
+                                                color={previewIcon.color}
+                                            />
+                                        </View>
+                                    ) : previewType === 'image' ||
+                                        pendingMedia.picked.thumbnailUri ? (
+                                        <Image
+                                            source={{
+                                                uri:
+                                                    previewType === 'video'
+                                                        ? pendingMedia.picked
+                                                            .thumbnailUri
+                                                        : pendingMedia.picked.localUri,
+                                            }}
+                                            style={styles.previewThumb}
+                                            resizeMode="cover"
+                                        />
+                                    ) : (
+                                        <View
+                                            style={[
+                                                styles.previewThumb,
+                                                {
+                                                    backgroundColor: '#F3F4F6',
+                                                    justifyContent: 'center',
+                                                    alignItems: 'center',
+                                                },
+                                            ]}>
+                                            <Icon
+                                                name="film-outline"
+                                                size={22}
+                                                color="#9CA3AF"
+                                            />
+                                        </View>
+                                    )}
+                                    {previewType === 'video' && (
+                                        <View style={styles.videoBadge}>
+                                            <Icon
+                                                name="videocam"
+                                                size={10}
+                                                color="#fff"
+                                            />
+                                        </View>
+                                    )}
+                                </View>
+
+                                <View style={styles.previewInfo}>
+                                    <Text style={styles.previewFileName} numberOfLines={1}>
+                                        {pendingMedia.picked.fileName}
+                                    </Text>
+                                    <Text style={styles.previewFileMeta}>
+                                        {previewType === 'image'
+                                            ? 'Image'
+                                            : previewType === 'video'
+                                                ? 'Video'
+                                                : 'File'}{' '}
+                                        · {formatBytes(pendingMedia.picked.fileSize)}
+                                    </Text>
+                                    {isUploading && (
+                                        <View style={styles.previewProgressRow}>
+                                            <View style={styles.previewProgressTrack}>
+                                                <Animated.View
+                                                    style={[
+                                                        styles.previewProgressFill,
+                                                        {
+                                                            width: progressAnim.interpolate(
+                                                                {
+                                                                    inputRange: [0, 100],
+                                                                    outputRange: [
+                                                                        '0%',
+                                                                        '100%',
+                                                                    ],
+                                                                },
+                                                            ),
+                                                        },
+                                                    ]}
+                                                />
+                                            </View>
+                                            <Text style={styles.previewProgressPct}>
+                                                {pendingMedia.progress}%
+                                            </Text>
+                                        </View>
+                                    )}
+                                </View>
+
+                                {!isUploading && (
+                                    <TouchableOpacity
+                                        onPress={handleCancelMedia}
+                                        style={styles.cancelMediaBtn}>
+                                        <Icon
+                                            name="close-circle"
+                                            size={22}
+                                            color="#EF4444"
+                                        />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        )}
+
+                        <View style={styles.inputRow}>
+                            {/* Attachment Toggle */}
                             <TouchableOpacity
-                                onPress={handleCancelMedia}
-                                style={styles.cancelMediaBtn}>
+                                style={[
+                                    styles.attachButton,
+                                    hasMedia && styles.attachButtonDisabled,
+                                    showAttachMenu && styles.attachButtonActive,
+                                ]}
+                                onPress={() => setShowAttachMenu(!showAttachMenu)}
+                                disabled={hasMedia}>
                                 <Icon
-                                    name="close-circle"
-                                    size={22}
-                                    color="#EF4444"
+                                    name={showAttachMenu ? "close" : "add"}
+                                    size={24}
+                                    color={hasMedia ? '#D1D5DB' : '#6366F1'}
                                 />
                             </TouchableOpacity>
-                        )}
-                    </View>
-                )}
 
-                {/* Input Row */}
-                <View style={styles.inputContainer}>
-                    {/* Attachment Toggle */}
-                    <TouchableOpacity
-                        style={[
-                            styles.attachButton,
-                            hasMedia && styles.attachButtonDisabled,
-                            showAttachMenu && styles.attachButtonActive,
-                        ]}
-                        onPress={() => setShowAttachMenu(!showAttachMenu)}
-                        disabled={hasMedia}>
-                        <Icon
-                            name={showAttachMenu ? "close" : "add"}
-                            size={24}
-                            color={hasMedia ? '#D1D5DB' : '#6366F1'}
-                        />
-                    </TouchableOpacity>
-
-                    {isRecording ? (
-                        <View style={styles.recordingOverlay}>
-                            <Animated.View style={[styles.recordingDot, { opacity: progressAnim.interpolate({ inputRange: [0, 50, 100], outputRange: [1, 0.3, 1] }) }]} />
-                            <Text style={styles.recordingText}>Recording {recordTime}</Text>
-                        </View>
-                    ) : (
-                        <TextInput
-                            style={[styles.input, hasMedia && styles.inputDisabled]}
-                            placeholder={
-                                hasMedia
-                                    ? 'Press send to share…'
-                                    : 'Type a message...'
-                            }
-                            placeholderTextColor={hasMedia ? '#C0C5CF' : '#9CA3AF'}
-                            value={inputText}
-                            onChangeText={(text) => {
-                                setInputText(text);
-                                // Emit typing event
-                                if (conversationId) {
-                                    SocketService.emit('typing', {
-                                        conversationId,
-                                        receiverId: (otherUser as any)?._id || (otherUser as any)?.id,
-                                        isTyping: text.length > 0
-                                    });
-
-                                    // Reset typing indicator after 3 seconds of inactivity
-                                    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-                                    typingTimeoutRef.current = setTimeout(() => {
-                                        SocketService.emit('typing', {
-                                            conversationId,
-                                            receiverId: (otherUser as any)?._id || (otherUser as any)?.id,
-                                            isTyping: false
-                                        });
-                                    }, 3000);
-                                }
-                            }}
-                            multiline
-                            editable={!hasMedia}
-                        />
-                    )}
-
-                    {inputText.trim().length === 0 && !hasMedia ? (
-                        <TouchableOpacity
-                            style={[styles.sendButton, isRecording && { backgroundColor: '#EF4444' }]}
-                            onPressIn={onStartRecord}
-                            onPressOut={onStopRecord}
-                        >
-                            <Icon name={isRecording ? "mic" : "mic-outline"} size={22} color="#fff" />
-                        </TouchableOpacity>
-                    ) : (
-                        <TouchableOpacity
-                            style={[
-                                styles.sendButton,
-                                (!canSend || isUploading) &&
-                                styles.sendButtonDisabled,
-                            ]}
-                            onPress={handleSendMessage}
-                            disabled={!canSend || isUploading}>
-                            {isUploading ? (
-                                <ActivityIndicator size="small" color="#FFFFFF" />
+                            {isRecording ? (
+                                <View style={styles.recordingOverlay}>
+                                    <Animated.View style={[styles.recordingDot, { opacity: progressAnim.interpolate({ inputRange: [0, 50, 100], outputRange: [1, 0.3, 1] }) }]} />
+                                    <Text style={styles.recordingText}>Recording {recordTime}</Text>
+                                </View>
                             ) : (
-                                <Icon name="send" size={18} color="#FFFFFF" />
+                                <TextInput
+                                    style={[styles.input, hasMedia && styles.inputDisabled]}
+                                    placeholder={
+                                        hasMedia
+                                            ? 'Press send to share…'
+                                            : 'Type a message...'
+                                    }
+                                    placeholderTextColor={hasMedia ? '#C0C5CF' : '#9CA3AF'}
+                                    value={inputText}
+                                    onChangeText={(text) => {
+                                        setInputText(text);
+                                        // Emit typing event
+                                        if (conversationId) {
+                                            socket.emit('typing', {
+                                                conversationId,
+                                                receiverId: (otherUser as any)?._id || (otherUser as any)?.id,
+                                                isTyping: text.length > 0
+                                            });
+
+                                            // Reset typing indicator after 3 seconds of inactivity
+                                            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                                            typingTimeoutRef.current = setTimeout(() => {
+                                                socket.emit('typing', {
+                                                    conversationId,
+                                                    receiverId: (otherUser as any)?._id || (otherUser as any)?.id,
+                                                    isTyping: false
+                                                });
+                                            }, 3000);
+                                        }
+                                    }}
+                                    multiline
+                                    editable={!hasMedia}
+                                />
                             )}
-                        </TouchableOpacity>
-                    )}
+
+                            {canSend ? (
+                                <TouchableOpacity
+                                    style={[
+                                        styles.sendButton,
+                                        isUploading && styles.sendButtonDisabled,
+                                    ]}
+                                    onPress={handleSendMessage}
+                                    disabled={isUploading}>
+                                    {isUploading ? (
+                                        <ActivityIndicator size="small" color="#FFFFFF" />
+                                    ) : (
+                                        <Icon name="send" size={18} color="#FFFFFF" />
+                                    )}
+                                </TouchableOpacity>
+                            ) : (
+                                <TouchableOpacity
+                                    style={[styles.sendButton, isRecording && { backgroundColor: '#EF4444' }]}
+                                    onPressIn={onStartRecord}
+                                    onPressOut={onStopRecord}
+                                >
+                                    <Icon name={isRecording ? "mic" : "mic-outline"} size={22} color="#fff" />
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    </View>
                 </View>
             </KeyboardAvoidingView>
 
@@ -2199,15 +2407,28 @@ const styles = StyleSheet.create({
     },
     cancelMediaBtn: { padding: 4 },
 
-    // Input row
+    keyboardAvoidingStyle: {
+        flex: 1,
+    },
+    messageListContainer: {
+        flex: 1,
+    },
+    inputAreaContainer: {
+        width: '100%',
+    },
+    // Input group (Vertical: Preview Top, Input Bottom)
     inputContainer: {
+        backgroundColor: '#FFFFFF',
+        borderTopWidth: 1,
+        borderTopColor: '#F3F4F6',
+        paddingBottom: Platform.OS === 'ios' ? 20 : 0,
+        width: '100%',
+    },
+    inputRow: {
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 10,
         paddingVertical: 10,
-        backgroundColor: '#FFFFFF',
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
     },
     attachButton: {
         padding: 8,
@@ -2618,6 +2839,81 @@ const styles = StyleSheet.create({
     quotedText: {
         fontSize: 12,
         lineHeight: 16,
+    },
+    // ── Call Log Styles ──
+    callLogBubble: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 12,
+        borderRadius: 16,
+        backgroundColor: '#F3F4F6',
+        maxWidth: 240,
+    },
+    callLogMissed: {
+        backgroundColor: '#FEF2F2',
+        borderWidth: 1,
+        borderColor: '#FEE2E2',
+    },
+    callLogIconContainer: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    callLogInfo: {
+        flex: 1,
+    },
+    callLogTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#374151',
+    },
+    callLogMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 2,
+    },
+    callLogTypeLabel: {
+        fontSize: 12,
+        color: '#6B7280',
+        fontWeight: '500',
+    },
+    callLogDot: {
+        width: 3,
+        height: 3,
+        borderRadius: 1.5,
+        backgroundColor: '#D1D5DB',
+        marginHorizontal: 6,
+    },
+    callLogDuration: {
+        fontSize: 12,
+        color: '#6B7280',
+    },
+    callLogDivider: {
+        width: 1,
+        height: 24,
+        backgroundColor: '#E5E7EB',
+        marginHorizontal: 12,
+    },
+    callLogCallbackBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#EEF2FF',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    callLogWrapper: {
+        width: '100%',
+        alignItems: 'center',
+        marginVertical: 12,
+    },
+    callLogTimestamp: {
+        fontSize: 10,
+        color: '#9CA3AF',
+        marginTop: 4,
     },
 });
 

@@ -15,12 +15,14 @@ import {
     Animated,
     Pressable,
     DeviceEventEmitter,
+    ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/Ionicons';
 import CountryPicker, { CountryCode, Country } from 'react-native-country-picker-modal';
 import { login } from '../../services/authServices';
+import NotificationService from '../../services/NotificationService';
 import { Colors, Shadows, Spacing } from '../../theme/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -77,6 +79,10 @@ const LoginScreen = () => {
 
             const data = await login({ number: fullNumber, password });
             if (data.success) {
+                // Sync VoIP and FCM tokens after successful login
+                // Passing user ID directly to avoid race condition with AsyncStorage
+                await NotificationService.getInstance().syncTokensAfterLogin(data.user.id);
+                
                 // Small delay to ensure AsyncStorage is fully flushed before re-routing
                 setTimeout(() => DeviceEventEmitter.emit('AUTH_UPDATED'), 200);
             }

@@ -53,7 +53,7 @@ const NotificationPermissionModal = () => {
 
     const handleAllow = async () => {
         console.log('Firebase [UI]: User clicked Allow. Triggering system prompt...');
-        await NotificationService.requestUserPermission();
+        await NotificationService.getInstance().requestUserPermission();
         closeModal();
     };
 

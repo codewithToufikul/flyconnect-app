@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
   INBOX: 'flyconnect_inbox',
   MESSAGES_PREFIX: 'flyconnect_msg_',
   QUEUED_MESSAGES: 'flyconnect_queued_msgs',
+  RECENT_SEARCHES: 'flyconnect_recent_searches',
 };
 
 class StorageService {
@@ -85,6 +86,40 @@ class StorageService {
       await AsyncStorage.multiRemove(flyConnectKeys);
     } catch (error) {
       console.error('StorageService: Error clearing cache', error);
+    }
+  }
+
+  // ── Recent Searches ───────────────────────────────────────────────────────
+
+  static async saveRecentSearch(user: any) {
+    try {
+      if (!user) return;
+      
+      const current = await this.getRecentSearches();
+      const userId = user._id || user.id;
+      
+      // Remove if already exists (to move to top)
+      const filtered = current.filter((u: any) => (u._id || u.id) !== userId);
+      
+      // Add to front and limit to 5
+      const updated = [user, ...filtered].slice(0, 5);
+      
+      await AsyncStorage.setItem(
+        STORAGE_KEYS.RECENT_SEARCHES,
+        JSON.stringify(updated),
+      );
+    } catch (error) {
+      console.error('StorageService: Error saving recent search', error);
+    }
+  }
+
+  static async getRecentSearches(): Promise<any[]> {
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEYS.RECENT_SEARCHES);
+      return data ? JSON.parse(data) : [];
+    } catch (error) {
+      console.error('StorageService: Error getting recent searches', error);
+      return [];
     }
   }
 }

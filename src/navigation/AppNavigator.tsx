@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StyleSheet, View, Platform, ActivityIndicator, DeviceEventEmitter } from 'react-native';
+import { StyleSheet, View, Platform, ActivityIndicator, DeviceEventEmitter, Linking, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { BlurView } from '@react-native-community/blur';
 
@@ -14,16 +14,21 @@ import ProfileStack from './stacks/ProfileStack';
 import CallsStack from './stacks/CallsStack';
 import SearchStack from './stacks/SearchStack';
 import ChatScreen from '../screens/Main/ChatScreen';
+import ChatDetailScreen from '../screens/Main/ChatDetailScreen';
 import IncomingCallScreen from '../screens/Calls/IncomingCallScreen';
 import ActiveCallScreen from '../screens/Calls/ActiveCallScreen';
 import PermissionScreen from '../screens/Auth/PermissionScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { check, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import { useInbox } from '../context/InboxContext';
+import { loginWithFlyBook } from '../services/authServices';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 const MainTabs = () => {
+    const { totalUnreadCount, totalMissedCallCount } = useInbox();
+
     return (
         <Tab.Navigator
             screenOptions={({ route }) => ({
@@ -40,8 +45,8 @@ const MainTabs = () => {
                 tabBarInactiveTintColor: Colors.textSecondary,
                 tabBarIcon: ({ focused, color, size }) => {
                     let iconName = 'help-outline';
-                    if (route.name === 'Home') {
-                        iconName = focused ? 'home' : 'home-outline';
+                    if (route.name === 'Chats') {
+                        iconName = focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline';
                     } else if (route.name === 'Calls') {
                         iconName = focused ? 'call' : 'call-outline';
                     } else if (route.name === 'Search') {
@@ -53,8 +58,22 @@ const MainTabs = () => {
                 },
             })}
         >
-            <Tab.Screen name="Home" component={HomeScreen} />
-            <Tab.Screen name="Calls" component={CallsStack} />
+            <Tab.Screen 
+                name="Chats" 
+                component={HomeScreen} 
+                options={{
+                    tabBarBadge: totalUnreadCount > 0 ? totalUnreadCount : undefined,
+                    tabBarBadgeStyle: { backgroundColor: Colors.primary, fontSize: 10 },
+                }}
+            />
+            <Tab.Screen 
+                name="Calls" 
+                component={CallsStack} 
+                options={{
+                    tabBarBadge: totalMissedCallCount > 0 ? totalMissedCallCount : undefined,
+                    tabBarBadgeStyle: { backgroundColor: Colors.error, fontSize: 10 },
+                }}
+            />
             <Tab.Screen name="Search" component={SearchStack} />
             <Tab.Screen name="Profile" component={ProfileStack} />
         </Tab.Navigator>
@@ -122,6 +141,66 @@ const AppNavigator = () => {
         };
     }, []);
 
+    // --- Global Deep Link SSO Handler ---
+    useEffect(() => {
+        const handleIncomingUrl = async (event: { url: string }) => {
+            const { url } = event;
+            console.log('🔗 [SSO-DeepLink] Incoming URL in AppNavigator:', url);
+
+            if (url.includes('flyconnect://auth')) {
+                try {
+                    const dataStr = url.split('data=')[1];
+                    if (!dataStr) return;
+
+                    const decodedData = JSON.parse(decodeURIComponent(dataStr));
+                    const { token: flyBookToken, target } = decodedData;
+
+                    console.log('🎯 [SSO-DeepLink] Parsed target:', target);
+
+                    if (target) {
+                        await AsyncStorage.setItem('@pending_nav_target', target);
+                    }
+
+                    // CASE 1: User is already logged in
+                    if (userToken) {
+                        console.log('✅ [SSO-DeepLink] Already logged in, triggering navigation...');
+                        if (target && target.includes('chat:')) {
+                            const userId = target.split(':')[1];
+                            // Direct emit. HomeScreen or current active screen will catch this
+                            DeviceEventEmitter.emit('NAVIGATE_TO_CHAT', { userId });
+                        }
+                    } 
+                    // CASE 2: User needs to log in via SSO
+                    else if (flyBookToken) {
+                        console.log('🔄 [SSO-DeepLink] Need SSO login, exchanging token...');
+                        DeviceEventEmitter.emit('SSO_LOADING', true);
+                        try {
+                            const result = await loginWithFlyBook(flyBookToken);
+                            if (result.success) {
+                                DeviceEventEmitter.emit('AUTH_UPDATED');
+                            } else {
+                                Alert.alert('SSO Error', result.message || 'Failed to sync with FlyBook');
+                            }
+                        } finally {
+                            DeviceEventEmitter.emit('SSO_LOADING', false);
+                        }
+                    }
+                } catch (e) {
+                    console.error('❌ [SSO-DeepLink] Handler Error:', e);
+                }
+            }
+        };
+
+        const sub = Linking.addEventListener('url', handleIncomingUrl);
+        
+        // Handle background launch/cold start
+        Linking.getInitialURL().then(url => {
+            if (url) handleIncomingUrl({ url });
+        });
+
+        return () => sub.remove();
+    }, [userToken]);
+
     if (isLoading) {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background }}>
@@ -148,6 +227,11 @@ const AppNavigator = () => {
                     <Stack.Screen
                         name="ChatScreen"
                         component={ChatScreen}
+                        options={{ headerShown: false }}
+                    />
+                    <Stack.Screen
+                        name="ChatDetail"
+                        component={ChatDetailScreen}
                         options={{ headerShown: false }}
                     />
                     <Stack.Screen

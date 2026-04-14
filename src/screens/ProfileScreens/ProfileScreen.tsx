@@ -6,7 +6,8 @@ import {
     Image,
     TouchableOpacity,
     ScrollView,
-    SafeAreaView,
+    StatusBar,
+    Linking,
     Dimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -15,6 +16,8 @@ import { Colors, Shadows } from '../../theme/theme';
 import LinearGradient from 'react-native-linear-gradient';
 import { logout } from '../../services/authServices';
 import { useNavigation } from '@react-navigation/native';
+import { DeviceEventEmitter } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
@@ -24,76 +27,53 @@ const ProfileScreen = () => {
 
     const handleLogout = async () => {
         await logout();
-        navigation.reset({
-            index: 0,
-            routes: [{ name: 'Welcome' }],
-        });
+        // Emit event to notify AppNavigator to re-check token and unmount main stack
+        DeviceEventEmitter.emit('AUTH_UPDATED');
     };
 
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView showsVerticalScrollIndicator={false}>
-                {/* Header/Cover Section */}
-                <View style={styles.header}>
-                    <LinearGradient
-                        colors={[Colors.primary, Colors.secondary]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.coverGradient}
-                    />
+                {/* Simple Header Section */}
+                <View style={styles.profileHeader}>
+                    <View style={styles.imageContainer}>
+                        <Image
+                            source={{ uri: user?.profileImage || 'https://i.ibb.co/mcL9L2t/f10ff70a7155e5ab666bcdd1b45b726d.jpg' }}
+                            style={styles.profileImage}
+                        />
+                    </View>
 
-                    <View style={styles.profileCard}>
-                        <View style={styles.imageContainer}>
-                            <Image
-                                source={{ uri: user?.profileImage || 'https://i.ibb.co/mcL9L2t/f10ff70a7155e5ab666bcdd1b45b726d.jpg' }}
-                                style={styles.profileImage}
-                            />
-                            <TouchableOpacity style={styles.editImageBtn}>
-                                <Icon name="camera" size={16} color="#FFF" />
-                            </TouchableOpacity>
+                    <Text style={styles.userName}>{user?.name || 'User Name'}</Text>
+                    {user?.userName && <Text style={styles.userNameSub}>@{user.userName}</Text>}
+
+                    {user?.verificationStatus && (
+                        <View style={styles.verifiedBadge}>
+                            <Icon name="checkmark-circle" size={14} color={Colors.secondary} />
+                            <Text style={styles.verifiedText}>Verified Account</Text>
                         </View>
+                    )}
 
-                        <Text style={styles.userName}>{user?.name || 'User Name'}</Text>
-                        <Text style={styles.phoneNumber}>{user?.number || 'No Phone'}</Text>
-
-                        {user?.verificationStatus && (
-                            <View style={styles.verifiedBadge}>
-                                <Icon name="checkmark-circle" size={14} color={Colors.secondary} />
-                                <Text style={styles.verifiedText}>Verified Account</Text>
-                            </View>
-                        )}
-                    </View>
+                    <TouchableOpacity
+                        style={styles.flybookBtn}
+                        onPress={() => Linking.openURL(`https://flybook.app/profile/${user?.userName || ''}`)}
+                    >
+                        <LinearGradient
+                            colors={[Colors.primary, '#4F46E5']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.flybookGradient}
+                        >
+                            <Icon name="globe-outline" size={18} color="#FFF" />
+                            <Text style={styles.flybookBtnText}>Go to Flybook Profile</Text>
+                        </LinearGradient>
+                    </TouchableOpacity>
                 </View>
 
-                {/* Stats/Quick Actions */}
-                <View style={styles.statsRow}>
-                    <View style={styles.statItem}>
-                        <Text style={styles.statValue}>0</Text>
-                        <Text style={styles.statLabel}>Posts</Text>
-                    </View>
-                    <View style={styles.statDivider} />
-                    <View style={styles.statItem}>
-                        <Text style={styles.statValue}>0</Text>
-                        <Text style={styles.statLabel}>Friends</Text>
-                    </View>
-                    <View style={styles.statDivider} />
-                    <View style={styles.statItem}>
-                        <Text style={styles.statValue}>0</Text>
-                        <Text style={styles.statLabel}>Groups</Text>
-                    </View>
-                </View>
 
                 {/* Settings Options */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Account Settings</Text>
 
-                    <TouchableOpacity style={styles.optionItem}>
-                        <View style={[styles.optionIcon, { backgroundColor: '#E0E7FF' }]}>
-                            <Icon name="person-outline" size={20} color={Colors.primary} />
-                        </View>
-                        <Text style={styles.optionText}>Edit Profile</Text>
-                        <Icon name="chevron-forward" size={18} color={Colors.border} />
-                    </TouchableOpacity>
 
                     <TouchableOpacity style={styles.optionItem}>
                         <View style={[styles.optionIcon, { backgroundColor: '#DCFCE7' }]}>
@@ -143,34 +123,43 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: '#F8FAFC',
     },
-    header: {
-        paddingBottom: 20,
-    },
-    coverGradient: {
-        height: 120,
-        width: '100%',
-    },
-    profileCard: {
+    profileHeader: {
         backgroundColor: '#FFF',
-        marginHorizontal: 20,
-        marginTop: -50,
-        borderRadius: 24,
-        padding: 20,
+        paddingVertical: 40,
         alignItems: 'center',
+        borderBottomLeftRadius: 30,
+        borderBottomRightRadius: 30,
         ...Shadows.default,
-        borderWidth: 1,
-        borderColor: '#F1F5F9',
+        marginBottom: 20,
     },
     imageContainer: {
-        position: 'relative',
-        marginBottom: 12,
+        marginBottom: 16,
     },
     profileImage: {
-        width: 100,
-        height: 100,
-        borderRadius: 50,
+        width: 120,
+        height: 120,
+        borderRadius: 60,
         borderWidth: 4,
-        borderColor: '#FFF',
+        borderColor: '#F1F5F9',
+    },
+    flybookBtn: {
+        marginTop: 20,
+        width: '65%',
+        borderRadius: 14,
+        overflow: 'hidden',
+        ...Shadows.default,
+    },
+    flybookGradient: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        gap: 10,
+    },
+    flybookBtnText: {
+        color: '#FFF',
+        fontSize: 14,
+        fontWeight: '700',
     },
     editImageBtn: {
         position: 'absolute',
@@ -186,61 +175,30 @@ const styles = StyleSheet.create({
         borderColor: '#FFF',
     },
     userName: {
-        fontSize: 22,
+        fontSize: 24,
         fontWeight: '800',
         color: Colors.text,
         marginBottom: 2,
     },
-    phoneNumber: {
-        fontSize: 14,
+    userNameSub: {
+        fontSize: 15,
         color: Colors.textSecondary,
         fontWeight: '500',
-        marginBottom: 8,
+        marginBottom: 12,
     },
     verifiedBadge: {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#DCFCE7',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-        gap: 4,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        gap: 6,
     },
     verifiedText: {
-        fontSize: 11,
+        fontSize: 12,
         color: '#166534',
         fontWeight: '700',
-    },
-    statsRow: {
-        flexDirection: 'row',
-        backgroundColor: '#FFF',
-        marginHorizontal: 20,
-        borderRadius: 20,
-        paddingVertical: 15,
-        marginBottom: 25,
-        ...Shadows.default,
-        borderWidth: 1,
-        borderColor: '#F1F5F9',
-    },
-    statItem: {
-        flex: 1,
-        alignItems: 'center',
-    },
-    statDivider: {
-        width: 1,
-        height: '60%',
-        backgroundColor: '#F1F5F9',
-        alignSelf: 'center',
-    },
-    statValue: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: Colors.text,
-    },
-    statLabel: {
-        fontSize: 12,
-        color: Colors.textSecondary,
-        marginTop: 2,
     },
     section: {
         marginHorizontal: 20,

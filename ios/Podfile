@@ -14,8 +14,11 @@ use_frameworks! :linkage => :static
 $RNPermissions = [
   'Camera',
   'Microphone',
-  'PhotoLibrary'
+  'Notifications'
 ]
+
+require_relative '../node_modules/react-native-permissions/scripts/setup.rb'
+setup_permissions($RNPermissions)
 
 platform :ios, '15.1'
 prepare_react_native_project!

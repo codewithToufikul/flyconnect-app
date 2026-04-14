@@ -201,12 +201,17 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
         status: 'INCOMING',
       });
 
-      // Show Native Call UI
-      CallKeepService.displayIncomingCall(
-        callUUID,
-        mappedCaller.name,
-        mappedCaller.name
-      );
+      // Show Native Call UI ONLY if app is in background
+      if (AppState.currentState !== 'active') {
+        console.log('📱 [CallContext] App is not active, showing native CallKeep UI.');
+        CallKeepService.displayIncomingCall(
+          callUUID,
+          mappedCaller.name,
+          mappedCaller.name
+        );
+      } else {
+        console.log('📱 [CallContext] App is active, skipping native CallKeep UI (In-app UI will handle it).');
+      }
 
       // Emit ringing to server
       socket.emit('call:ringing', { callId: data.callId, callerId: mappedCaller.id });
@@ -226,7 +231,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       }
       
       // Production fix: Clear lingering notifications
-      NotificationService.cancelAllCallNotifications();
+      NotificationService.getInstance().cancelAllCallNotifications();
       
       setCallSession(null);
     };
@@ -353,7 +358,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!socket || !callSession) return;
     
     // Clear notifications immediately
-    NotificationService.cancelAllCallNotifications();
+    NotificationService.getInstance().cancelAllCallNotifications();
 
     socket.emit('call:accept', { 
         callId: callSession.callId, 
@@ -368,7 +373,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!socket || !callSession) return;
 
     // Clear notifications immediately
-    NotificationService.cancelAllCallNotifications();
+    NotificationService.getInstance().cancelAllCallNotifications();
 
     socket.emit('call:decline', { 
         callId: callSession.callId, 
@@ -384,7 +389,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!socket || !callSession) return;
 
     // Clear notifications immediately
-    NotificationService.cancelAllCallNotifications();
+    NotificationService.getInstance().cancelAllCallNotifications();
 
     socket.emit('call:cancel', { 
         callId: callSession.callId, 
@@ -399,8 +404,18 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
   const endCall = useCallback(() => {
     if (!socket || !callSession) return;
 
+    // Smart logic: If call wasn't active yet, treat as cancel/decline
+    if (callSession.status === 'OUTGOING') {
+      cancelCall();
+      return;
+    }
+    if (callSession.status === 'INCOMING') {
+      declineCall();
+      return;
+    }
+
     // Clear notifications immediately
-    NotificationService.cancelAllCallNotifications();
+    NotificationService.getInstance().cancelAllCallNotifications();
 
     const otherUserId = callSession.caller.id === currentUserId 
         ? callSession.receiver.id 
@@ -414,7 +429,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       CallKeepService.endCall(callSession.callUUID);
     }
     setCallSession(null);
-  }, [socket, callSession, currentUserId]);
+  }, [socket, callSession, currentUserId, cancelCall, declineCall]);
 
   // Initial CallKeep configuration
   useEffect(() => {

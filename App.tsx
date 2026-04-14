@@ -9,164 +9,10 @@ import NotificationService from './src/services/NotificationService';
 import messaging from '@react-native-firebase/messaging';
 import { get, declineCallAPI } from './src/services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IMPORTANT: Background handler MUST be registered outside of any component
-// ─────────────────────────────────────────────────────────────────────────────
-import RNCallKeep from 'react-native-callkeep';
-import CallKeepService from './src/services/CallKeepService';
-
-import notifee, { EventType } from '@notifee/react-native';
-
-// Simple UUID generator for background scope
-const generateUUID = () => {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Unified CallKeep Setup (Must run once for both UI and Background processes)
-// ─────────────────────────────────────────────────────────────────────────────
-const callKeepOptions = {
-  ios: { appName: 'FlyConnect' },
-  android: {
-    alertTitle: 'Permissions required',
-    alertDescription: 'This application needs to access your phone accounts',
-    cancelButton: 'Cancel',
-    okButton: 'ok',
-    imageName: 'phone_account_icon',
-    additionalPermissions: [],
-    selfManaged: true,
-  },
-};
-
-RNCallKeep.setup(callKeepOptions);
-RNCallKeep.setAvailable(true);
-if (Platform.OS === 'android') {
-  RNCallKeep.registerPhoneAccount(callKeepOptions);
-  RNCallKeep.registerAndroidEvents();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Background FCM handler
-// ─────────────────────────────────────────────────────────────────────────────
-messaging().setBackgroundMessageHandler(async remoteMessage => {
-  console.log('🌌 [FCM] Killed/Background message:', remoteMessage.data);
-
-  const type = remoteMessage.data?.type;
-
-  if (type === 'CALL_INCOMING') {
-    const data = remoteMessage.data as any;
-    const { callId, callerName, callerId, callType } = data || {};
-    const uuid = generateUUID();
-
-    // Save to AsyncStorage for the main app process to see on mount
-    await AsyncStorage.setItem('@pending_call_data', JSON.stringify({
-      callId,
-      callerName,
-      callerId,
-      callType: callType || 'audio',
-      callUUID: uuid,
-      timestamp: Date.now()
-    }));
-
-    // We only display the Notifee notification in the background to avoid duplicates.
-    await NotificationService.displayCallNotification({
-      ...remoteMessage,
-      data: { ...remoteMessage.data, callUUID: uuid }
-    });
-  } else if (type === 'CALL_CANCELLED' || type === 'CALL_ENDED') {
-    console.log('🛑 [FCM] Call cancelled/ended, clearing notifications.');
-    await notifee.cancelAllNotifications(); 
-    RNCallKeep.endAllCalls();
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Notifee Background event handler
-// ─────────────────────────────────────────────────────────────────────────────
-notifee.onBackgroundEvent(async ({ type, detail }) => {
-  const { notification, pressAction } = detail;
-
-  console.log('🌌 [Notifee-BG] Event:', type, pressAction?.id);
-
-  if (type === EventType.PRESS) {
-    if (notification?.id) {
-       await notifee.cancelNotification(notification.id);
-    }
-  }
-
-  if (type === EventType.ACTION_PRESS && pressAction?.id === 'answer') {
-    console.log('📞 [Notifee-BG] Answer clicked');
-    
-    // Clear notification immediately since we're answering
-    if (notification?.id) {
-       await notifee.cancelNotification(notification.id);
-    }
-
-    await AsyncStorage.setItem('@pending_call_action', JSON.stringify({
-      action: 'answered',
-      callId: notification?.data?.callId,
-      callerName: notification?.data?.callerName,
-      callerId: notification?.data?.callerId,
-      callUUID: notification?.data?.callUUID,
-      callType: notification?.data?.callType || 'audio'
-    }));
-
-    RNCallKeep.backToForeground();
-  }
-
-  if (type === EventType.ACTION_PRESS && pressAction?.id === 'decline') {
-    console.log('🛑 [Notifee-BG] Decline clicked');
-    RNCallKeep.endAllCalls();
-    if (notification?.id) {
-      await notifee.cancelNotification(notification.id);
-    }
-  }
-
-  if (type === EventType.PRESS) {
-    console.log('📱 [Notifee-BG] Tapped body');
-
-    await AsyncStorage.setItem('@pending_call_action', JSON.stringify({
-      action: 'tapped',
-      callId: notification?.data?.callId,
-      callerName: notification?.data?.callerName,
-      callerId: notification?.data?.callerId,
-      callUUID: notification?.data?.callUUID,
-      callType: notification?.data?.callType || 'audio'
-    }));
-
-    RNCallKeep.backToForeground();
-  }
-
-  if (type === EventType.ACTION_PRESS && pressAction?.id === 'decline') {
-    console.log('🛑 [Notifee-BG] Decline clicked');
-    
-    // Clear notification immediately since we're declining
-    if (notification?.id) {
-       await notifee.cancelNotification(notification.id);
-    }
-
-    try {
-      const data = notification?.data as any;
-      if (data?.callId && data?.callerId) {
-        await declineCallAPI({
-          callId: data.callId,
-          callerId: data.callerId
-        });
-      }
-    } catch (err) {
-      console.error('❌ [Notifee-BG] Failed to signal decline:', err);
-    }
-
-    RNCallKeep.endAllCalls();
-  }
-});
-
-LogBox.ignoreLogs(['Warning: CountryModal: Support for defaultProps']);
+import { ToastProvider } from './src/context/ToastContext';
+import InAppToast from './src/components/InAppToast';
+import { InboxProvider } from './src/context/InboxContext';
+import notifee from '@notifee/react-native';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: build the user object from notification data and navigate to chat
@@ -177,9 +23,7 @@ async function navigateToChat(
 ) {
   if (!data?.senderId) return;
 
-  // Handles normal chat message navigation
   try {
-    // Fetch the sender's profile to pass to ChatScreen
     const response = await get<any>(`/api/v1/users/${data.senderId}`);
     const senderUser = response?.user ?? {
       _id: data.senderId,
@@ -188,7 +32,6 @@ async function navigateToChat(
     };
     navigationRef.navigate('ChatScreen', { user: senderUser });
   } catch {
-    // Fallback: navigate with minimal data from notification payload
     navigationRef.navigate('ChatScreen', {
       user: {
         _id: data.senderId,
@@ -199,48 +42,119 @@ async function navigateToChat(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: iOS killed-state call handling
+// iOS-এ setBackgroundMessageHandler killed state-এ কাজ করে না।
+// তাই notification tap হলে getInitialNotification() থেকে call data পড়ে
+// AsyncStorage-এ save করা হয়, CallContext mount হলে সেটা process করে।
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleCallNotificationTap(
+  data: Record<string, string> | undefined,
+): Promise<boolean> {
+  if (!data || data.type !== 'CALL_INCOMING') return false;
+
+  const { callId, callerId, callerName, callType, callUUID } = data;
+  if (!callId) return false;
+
+  // Check if the call is still fresh (under 45 seconds)
+  if (data.sentAt) {
+    const age = Date.now() - parseInt(data.sentAt, 10);
+    if (age > 45000) {
+      console.log(`[iOS-Call] Call ${callId} is too old (${age}ms), ignoring.`);
+      return false;
+    }
+  }
+
+  console.log(`[iOS-Call] 📞 Restoring call session from notification tap: ${callId}`);
+
+  // Save to AsyncStorage — CallContext reads this on mount / foreground
+  await AsyncStorage.setItem('@pending_call_data', JSON.stringify({
+    callId,
+    callerName: callerName || 'Someone',
+    callerId: callerId || '',
+    callType: callType || 'audio',
+    callUUID: callUUID || '',
+    timestamp: Date.now(),
+  }));
+
+  return true;
+}
+
 import { navigationRef } from './src/navigation/RootNavigation';
+
+const linking = {
+  prefixes: ['flyconnect://'],
+  config: {
+    screens: {
+      ChatScreen: 'chat/:userId',
+    },
+  },
+};
+
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 const App = () => {
 
   useEffect(() => {
     // Initialize FCM token registration + foreground listener
-    NotificationService.initialize();
+    NotificationService.getInstance().initialize();
 
-    // ── Foreground tap listener (app is OPEN and user taps notification) ──
-    // Note: foreground messages are handled inside NotificationService.
-    // This listener handles taps on notifications shown by the OS when app is open.
-
-    // ── Background tap listener (app is in BACKGROUND, user taps notification) ──
+    // ── Background tap: app was in background, user taps notification ──
     const unsubscribeBackground = messaging().onNotificationOpenedApp(
-      remoteMessage => {
-        console.log(
-          '📲 Notification tapped (background):',
-          remoteMessage.data,
-        );
-        if (navigationRef.current?.isReady()) {
-          navigateToChat(navigationRef.current, remoteMessage.data as Record<string, string>);
+      async remoteMessage => {
+        const data = remoteMessage.data as Record<string, string> | undefined;
+        console.log('📲 [App] Notification tapped (background):', data?.type);
+
+        if (data?.type === 'CALL_INCOMING') {
+          // iOS background: call data-এ save করো, CallContext process করবে
+          await handleCallNotificationTap(data);
+        } else {
+          if (navigationRef.current?.isReady()) {
+            navigateToChat(navigationRef.current, data);
+          }
         }
       },
     );
 
-    // ── Quit state (app was fully closed, user taps notification to open) ──
+    // ── Quit / Killed state: app was fully closed, user taps notification ──
+    // iOS-এ killed state-এ setBackgroundMessageHandler কাজ করে না।
+    // এখানেই পুরো iOS call notification handling করতে হয়।
     messaging()
       .getInitialNotification()
-      .then(remoteMessage => {
-        if (remoteMessage) {
-          console.log(
-            '📲 Notification tapped (quit state):',
-            remoteMessage.data,
-          );
-          // Small delay to let Navigation mount first
+      .then(async remoteMessage => {
+        if (!remoteMessage) return;
+        const data = remoteMessage.data as Record<string, string> | undefined;
+        console.log('📲 [App] Notification tapped (quit state):', data?.type);
+
+        if (data?.type === 'CALL_INCOMING') {
+          // iOS killed state call: save করো, CallContext mount হলে process করবে
+          const handled = await handleCallNotificationTap(data);
+          if (handled) {
+            // Cancel the Notifee notification যদি থাকে
+            try { await notifee.cancelAllNotifications(); } catch (_) {}
+          }
+        } else {
+          // Chat message notification
           setTimeout(() => {
             if (navigationRef.current?.isReady()) {
-              navigateToChat(navigationRef.current, remoteMessage.data as Record<string, string>);
+              navigateToChat(navigationRef.current, data);
             }
           }, 1000);
         }
       });
+
+    // ── iOS: Notifee initial notification (app opened via Notifee full-screen) ──
+    if (Platform.OS === 'ios') {
+      notifee.getInitialNotification().then(async initialNotif => {
+        if (!initialNotif) return;
+        const data = initialNotif.notification?.data as Record<string, string> | undefined;
+        console.log('📲 [App] Notifee initial notification (iOS):', data?.type);
+
+        if (data?.type === 'CALL_INCOMING') {
+          await handleCallNotificationTap(data);
+        }
+      });
+    }
 
     return () => {
       unsubscribeBackground();
@@ -248,20 +162,27 @@ const App = () => {
   }, []);
 
   return (
-    <ProfileProvider>
-      <SocketProvider>
-        <CallProvider>
-          <NavigationContainer ref={navigationRef}>
-            <StatusBar
-              barStyle="dark-content"
-              translucent
-              backgroundColor="transparent"
-            />
-            <AppNavigator />
-          </NavigationContainer>
-        </CallProvider>
-      </SocketProvider>
-    </ProfileProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ProfileProvider>
+        <ToastProvider>
+          <SocketProvider>
+            <CallProvider>
+              <InboxProvider>
+                <NavigationContainer ref={navigationRef} linking={linking}>
+                  <StatusBar
+                    barStyle="dark-content"
+                    translucent
+                    backgroundColor="transparent"
+                  />
+                  <AppNavigator />
+                  <InAppToast />
+                </NavigationContainer>
+              </InboxProvider>
+            </CallProvider>
+          </SocketProvider>
+        </ToastProvider>
+      </ProfileProvider>
+    </GestureHandlerRootView>
   );
 };
 

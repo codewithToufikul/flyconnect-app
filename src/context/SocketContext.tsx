@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import SocketService from "../services/SocketService";
 import { useProfile } from "./ProfileContext";
+import { useToast } from "./ToastContext";
+import { AppState } from "react-native";
 
 interface SocketContextType {
     isConnected: boolean;
@@ -13,11 +15,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [isConnected, setIsConnected] = useState(false);
     const [socket, setSocket] = useState<any>(null);
     const { user } = useProfile();
+    const { showToast } = useToast();
 
     useEffect(() => {
         const initSocket = async () => {
             if (user) {
-                // SocketService.connect() is async because it fetches the token
                 await SocketService.connect();
                 const socketInstance = SocketService.getSocket();
 
@@ -25,14 +27,43 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     setSocket(socketInstance);
                     setIsConnected(socketInstance.connected);
 
-                    socketInstance.on("connect", () => {
+                    const onConnect = () => {
                         console.log("🟢 Socket connected (Provider State)");
                         setIsConnected(true);
-                    });
-                    socketInstance.on("disconnect", () => {
+                    };
+                    const onDisconnect = () => {
                         console.log("🔴 Socket disconnected (Provider State)");
                         setIsConnected(false);
-                    });
+                    };
+                    const onReceiveMessage = (msg: any) => {
+                        const currentUserId = (user as any)?._id || (user as any)?.id;
+                        const senderId = msg.senderId?._id || msg.senderId?.id || msg.senderId;
+
+                        // Don't show toast for own messages
+                        if (senderId && senderId.toString() === currentUserId?.toString()) return;
+
+                        // Only show if app is in foreground
+                        if (AppState.currentState !== 'active') return;
+
+                        showToast({
+                            senderId: msg.senderId?._id || msg.senderId?.id || (typeof msg.senderId === 'string' ? msg.senderId : ''),
+                            senderName: msg.senderId?.name || 'New Message',
+                            senderImage: msg.senderId?.profileImage,
+                            message: msg.content || '',
+                            conversationId: msg.conversationId?._id || msg.conversationId || '',
+                            contentType: msg.contentType,
+                        });
+                    };
+
+                    socketInstance.on("connect", onConnect);
+                    socketInstance.on("disconnect", onDisconnect);
+                    socketInstance.on("receive_message", onReceiveMessage);
+
+                    return () => {
+                        socketInstance.off("connect", onConnect);
+                        socketInstance.off("disconnect", onDisconnect);
+                        socketInstance.off("receive_message", onReceiveMessage);
+                    };
                 }
             } else {
                 console.log("🚪 User logged out, disconnecting socket");
@@ -42,16 +73,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
         };
 
-        initSocket();
+        const cleanup = initSocket();
 
         return () => {
-            const currentSocket = SocketService.getSocket();
-            if (currentSocket) {
-                currentSocket.off("connect");
-                currentSocket.off("disconnect");
-            }
+            cleanup.then(unsub => unsub && unsub());
         };
-    }, [user]);
+    }, [user, showToast]);
 
     return (
         <SocketContext.Provider value={{ isConnected, socket }}>

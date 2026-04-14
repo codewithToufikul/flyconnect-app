@@ -54,7 +54,7 @@ class CallKeepService {
           callbacks.onToggleAudioRoute,
         );
       }
-      if (callbacks.onShowIncomingCallUi) {
+      if (Platform.OS === 'android' && callbacks.onShowIncomingCallUi) {
         RNCallKeep.addEventListener(
           'showIncomingCallUi',
           callbacks.onShowIncomingCallUi,
