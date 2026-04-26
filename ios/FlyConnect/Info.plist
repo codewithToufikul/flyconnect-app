@@ -32,11 +32,19 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>$(PRODUCT_NAME) needs access to your location to show nearby users and enhance your connection experience.</string>
+	<string>FlyConnect uses your location to show you nearby friends and help you connect with people in your local community.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>FlyConnect uses your location to keep you connected with nearby friends even when the app is in the background.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>FlyConnect uses your location to keep you connected with nearby friends even when the app is in the background.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>$(PRODUCT_NAME) needs access to your microphone for audio and video calls.</string>
+	<string>FlyConnect requires microphone access to enable high-quality audio during your crystal-clear voice and video calls.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>$(PRODUCT_NAME) needs access to your camera for video calls and profile pictures.</string>
+	<string>FlyConnect needs camera access to let you start video calls and capture beautiful profile pictures for your account.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>FlyConnect needs access to your photo library so you can share memorable images and videos with your friends in chat.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>FlyConnect needs permission to save images and videos you receive in chat directly to your photo library for easy access.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>AntDesign.ttf</string>
@@ -60,13 +68,9 @@
 	<array>
 		<string>remote-notification</string>
 		<string>voip</string>
-		<string>bluetooth-central</string>
-		<string>push-to-talk</string>
-		<string>nearby-interaction</string>
 		<string>location</string>
-		<string>external-accessory</string>
-		<string>processing</string>
 		<string>fetch</string>
+		<string>audio</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

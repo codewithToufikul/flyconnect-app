@@ -189,7 +189,7 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const flatListRef = useRef<FlatList>(null);
     const progressAnim = useRef(new Animated.Value(0)).current;
-    
+
     // Safety guard
     const isMounted = useRef(true);
 
@@ -279,13 +279,13 @@ const ChatScreen = ({ route, navigation }: any) => {
             if (!newMessage || !isMounted.current) return;
             const convId = newMessage.conversationId?._id || newMessage.conversationId;
             const incomingCid = convId?.toString();
-            
+
             if (incomingCid === conversationId) {
                 setMessages(prev => {
                     if (!Array.isArray(prev)) return [newMessage];
                     const existingIndex = prev.findIndex(m => m?._id === newMessage._id);
                     if (existingIndex > -1) return prev;
-                    
+
                     if (newMessage.senderId?._id?.toString() === currentUserId?.toString()) {
                         const tempIndex = prev.findIndex(m => m?._id?.toString().startsWith('temp-') && m.content === newMessage.content);
                         if (tempIndex > -1) {
@@ -382,17 +382,17 @@ const ChatScreen = ({ route, navigation }: any) => {
     useEffect(() => {
         return () => {
             try {
-            const recorder = getRecorder();
-            if (recorder) {
-                try {
-                    recorder.stopPlayer();
-                    recorder.removePlayBackListener();
-                    recorder.stopRecorder();
-                    recorder.removeRecordBackListener();
-                } catch (e) {
-                    console.error('Cleanup: Recorder error ignored:', e);
+                const recorder = getRecorder();
+                if (recorder) {
+                    try {
+                        recorder.stopPlayer();
+                        recorder.removePlayBackListener();
+                        recorder.stopRecorder();
+                        recorder.removeRecordBackListener();
+                    } catch (e) {
+                        console.error('Cleanup: Recorder error ignored:', e);
+                    }
                 }
-            }
             } catch (e) {
                 console.log('Cleanup suppressed:', e);
             }
@@ -806,7 +806,7 @@ const ChatScreen = ({ route, navigation }: any) => {
             }
 
             const path = Platform.select({
-                ios: `voice_${Date.now()}.m4a`,
+                ios: `${RNBlobUtil.fs.dirs.CacheDir}/voice_${Date.now()}.m4a`,
                 android: `${RNBlobUtil.fs.dirs.CacheDir}/voice_${Date.now()}.mp3`,
             });
 
@@ -814,16 +814,23 @@ const ChatScreen = ({ route, navigation }: any) => {
             setRecordTime('00:00');
             setIsRecording(true);
 
+            console.log(`🎤 [AudioRecord] Starting with path: ${path}`);
+
             const recorder = getRecorder();
-            if (!recorder) return;
+            if (!recorder) {
+                console.error('❌ [AudioRecord] Recorder instance is null');
+                return;
+            }
+
             const result = await recorder.startRecorder(path);
             recorder.addRecordBackListener((e: any) => {
                 setRecordTime(recorder.mmssss(Math.floor(e.currentPosition)));
                 setRecordSecs(Math.floor(e.currentPosition / 1000));
             });
-            console.log('Recording started:', result);
-        } catch (err) {
-            console.error('Start record error:', err);
+            console.log('✅ [AudioRecord] Started successfully:', result);
+        } catch (err: any) {
+            console.error('❌ [AudioRecord] Start failed:', err);
+            Alert.alert('Record Error', err.message || 'Could not start recording');
             setIsRecording(false);
         }
     };
@@ -1558,8 +1565,8 @@ const ChatScreen = ({ route, navigation }: any) => {
         return (
             <View style={[styles.centerContainer, { backgroundColor: '#F8FAFC', flex: 1, justifyContent: 'center', alignItems: 'center' }]}>
                 <Text style={{ color: '#EF4444' }}>Invalid Chat Parameters</Text>
-                <TouchableOpacity 
-                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.replace('Main')} 
+                <TouchableOpacity
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.replace('Main')}
                     style={{ marginTop: 20, padding: 10, backgroundColor: '#6366F1', borderRadius: 8 }}
                 >
                     <Text style={{ color: '#FFF' }}>Go Back</Text>
@@ -1631,7 +1638,7 @@ const ChatScreen = ({ route, navigation }: any) => {
 
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 5 : 0}
                 style={styles.keyboardAvoidingStyle}>
 
                 {/* ── Message List ── */}
@@ -1885,13 +1892,15 @@ const ChatScreen = ({ route, navigation }: any) => {
                                     )}
                                 </TouchableOpacity>
                             ) : (
-                                <TouchableOpacity
-                                    style={[styles.sendButton, isRecording && { backgroundColor: '#EF4444' }]}
-                                    onPressIn={onStartRecord}
-                                    onPressOut={onStopRecord}
-                                >
-                                    <Icon name={isRecording ? "mic" : "mic-outline"} size={22} color="#fff" />
-                                </TouchableOpacity>
+                                Platform.OS !== 'ios' && (
+                                    <TouchableOpacity
+                                        style={[styles.sendButton, isRecording && { backgroundColor: '#EF4444' }]}
+                                        onPressIn={onStartRecord}
+                                        onPressOut={onStopRecord}
+                                    >
+                                        <Icon name={isRecording ? "mic" : "mic-outline"} size={22} color="#fff" />
+                                    </TouchableOpacity>
+                                )
                             )}
                         </View>
                     </View>
@@ -1948,7 +1957,10 @@ const ChatScreen = ({ route, navigation }: any) => {
                                     style={styles.attachOptionItem}
                                     onPress={() => {
                                         setShowAttachMenu(false);
-                                        handlePickMedia('image');
+                                        const delay = Platform.OS === 'ios' ? 600 : 0;
+                                        setTimeout(() => {
+                                            handlePickMedia('image');
+                                        }, delay);
                                     }}>
                                     <View style={[styles.attachOptionIcon, { backgroundColor: '#6366F1' }]}>
                                         <Icon name="image" size={24} color="#fff" />
@@ -1960,7 +1972,10 @@ const ChatScreen = ({ route, navigation }: any) => {
                                     style={styles.attachOptionItem}
                                     onPress={() => {
                                         setShowAttachMenu(false);
-                                        handlePickMedia('video');
+                                        const delay = Platform.OS === 'ios' ? 600 : 0;
+                                        setTimeout(() => {
+                                            handlePickMedia('video');
+                                        }, delay);
                                     }}>
                                     <View style={[styles.attachOptionIcon, { backgroundColor: '#8B5CF6' }]}>
                                         <Icon name="videocam" size={24} color="#fff" />
@@ -1972,7 +1987,10 @@ const ChatScreen = ({ route, navigation }: any) => {
                                     style={styles.attachOptionItem}
                                     onPress={() => {
                                         setShowAttachMenu(false);
-                                        handlePickMedia('file');
+                                        const delay = Platform.OS === 'ios' ? 600 : 0;
+                                        setTimeout(() => {
+                                            handlePickMedia('file');
+                                        }, delay);
                                     }}>
                                     <View style={[styles.attachOptionIcon, { backgroundColor: '#10B981' }]}>
                                         <Icon name="document" size={24} color="#fff" />

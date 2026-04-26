@@ -4,6 +4,7 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useRef,
 } from 'react';
 import { useSocket } from './SocketContext';
 import { useProfile } from './ProfileContext';
@@ -57,20 +58,39 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isAudioActivated, setIsAudioActivated] = useState(false);
   const { socket } = useSocket();
   const { user } = useProfile();
+  const isProcessingActions = useRef(false);
+  const activeCallIdRef = useRef<string | null>(null);
+  const acceptedCallIds = useRef<Set<string>>(new Set()); // Guard against double signaling
+  const pendingAcceptRef = useRef(false); // Guard against early CallKeep answer
+  const lastTerminationTime = useRef<number>(0);
+  const displayedCallIds = useRef<Set<string>>(new Set()); // Deduplicate native UI display
 
   const currentUserId = (user as any)?._id || (user as any)?.id;
 
   const processPendingActions = useCallback(async () => {
     // We need socket and user to proceed with session set, 
     // because session depends on currentUserId and server communication.
-    if (!socket || !currentUserId || !user) return;
+    if (!socket || !currentUserId || !user || isProcessingActions.current) return;
+
+    isProcessingActions.current = true;
+
+    // 🔥 PROTECTION: If a call is already active or outgoing, DON'T let background 
+    // actions/notifs overwrite it and reset the UI.
+    if (callSession && (callSession.status === 'ACTIVE' || callSession.status === 'OUTGOING')) {
+      console.log('🛡️ [CallContext] Active session protected from background action overwrite.');
+      // Still clear the storage to avoid future triggers
+      await AsyncStorage.removeItem('@pending_call_action').catch(() => { });
+      await AsyncStorage.removeItem('@pending_call_data').catch(() => { });
+      isProcessingActions.current = false;
+      return;
+    }
 
     console.log('🔍 [CallContext] Reading pending actions from storage...');
 
     try {
       const storedActionStr = await AsyncStorage.getItem('@pending_call_action');
       const storedDataStr = await AsyncStorage.getItem('@pending_call_data');
-      
+
       let finalActionData = null;
 
       if (storedActionStr) {
@@ -83,10 +103,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
         // Check if reasonably fresh (under 60 seconds for cold boot)
         const age = Date.now() - (data.timestamp || 0);
         if (age < 60000) {
-           console.log('🎁 [CallContext] PERSISTED DATA FOUND (fresh):', data.callId);
-           finalActionData = { action: 'tapped', ...data };
+          console.log('🎁 [CallContext] PERSISTED DATA FOUND (fresh):', data.callId);
+          finalActionData = { action: 'tapped', ...data };
         } else {
-           console.log('🗑️ [CallContext] PERSISTED DATA DISCARDED (too old):', age, 'ms');
+          console.log('🗑️ [CallContext] PERSISTED DATA DISCARDED (too old):', age, 'ms');
         }
         await AsyncStorage.removeItem('@pending_call_data');
       }
@@ -94,8 +114,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       if (finalActionData) {
         const { action, callId, callerName, callerId, callUUID, callType } = finalActionData;
         console.log(`🚀 [CallContext] Initiating recovered session for ${callId} (${action})`);
-        
+
         if (action === 'answered') {
+          console.log(`[DEBUG/Client] Recovery action is ANSWERED for callId: ${callId}`);
           setCallSession({
             callUUID: callUUID || undefined,
             callId,
@@ -105,8 +126,17 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
             type: callType || 'audio',
             status: 'ACTIVE'
           });
-          socket.emit('call:accept', { callId, callerId: callerId || 'unknown' });
-        } else if (action === 'tapped' || action === 'incoming') { // 'tapped' is usually what we use
+          setIsAudioActivated(true);
+
+          if (socket.connected && !acceptedCallIds.current.has(callId)) {
+            console.log(`[DEBUG/Client] Emitting accept for recovered session: ${callId}`);
+            socket.emit('call:accept', { callId, callerId: callerId || 'unknown' });
+            acceptedCallIds.current.add(callId);
+          } else {
+            console.log(`[DEBUG/Client] Skipping emission for recovered session. connected: ${socket.connected}, alreadyAccepted: ${acceptedCallIds.current.has(callId)}`);
+          }
+        } else if (action === 'tapped' || action === 'incoming') { 
+          console.log(`[DEBUG/Client] Recovery action is TAPPED/INCOMING for callId: ${callId}`);
           setCallSession({
             callUUID: callUUID || undefined,
             callId,
@@ -117,43 +147,65 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
             status: 'INCOMING'
           });
         }
+
+        // 🔥 PENDING ACCEPT HANDSHAKE: If user answered via CallKeep before session was ready,
+        // fulfill that accept now that we have the data.
+        if (pendingAcceptRef.current) {
+          console.log('⚡ [CallContext] Fulfilling pending CallKeep accept...');
+          pendingAcceptRef.current = false;
+          // Use setTimeout to ensure state is set before calling accept
+          setTimeout(() => acceptCallRef.current(), 100);
+        }
       }
     } catch (e) {
       console.error('❌ [CallContext] Storage read error:', e);
+    } finally {
+      isProcessingActions.current = false;
     }
 
     // 2. Check Memory Store (For Background -> Foreground transitions while app process stayed alive)
-    if (pendingCallActions.answered && pendingCallActions.callId) {
-      // ... (existing logic is fine but let's make it consistent)
-      const { callId, callerName, callerId, callUUID, callType } = pendingCallActions;
-      setCallSession({
-        callUUID: callUUID || undefined,
-        callId: callId!,
-        channelName: `call_${callId}`,
-        caller: { id: callerId || 'unknown', name: callerName || 'Someone' },
-        receiver: { id: currentUserId, name: user.name, profileImage: user.profileImage },
-        type: callType || 'audio',
-        status: 'ACTIVE'
-      });
-      socket.emit('call:accept', { callId: callId!, callerId: callerId || 'unknown' });
-      clearPendingCallActions();
-    } else if (pendingCallActions.tapped && pendingCallActions.callId) {
-       const { callId, callerName, callerId, callUUID, callType } = pendingCallActions;
-       setCallSession({
-        callUUID: callUUID || undefined,
-        callId: callId!,
-        channelName: `call_${callId}`,
-        caller: { id: callerId || 'unknown', name: callerName || 'Someone' },
-        receiver: { id: currentUserId, name: user.name, profileImage: user.profileImage },
-        type: callType || 'audio',
-        status: 'INCOMING'
-      });
-       clearPendingCallActions();
-    } else if (pendingCallActions.declined && pendingCallActions.callId) {
-      socket.emit('call:decline', { 
-        callId: pendingCallActions.callId,
-        callerId: pendingCallActions.callerId || 'unknown'
-      });
+    if (pendingCallActions.callId) {
+      const { action, callId, callerName, callerId, callUUID, callType } = pendingCallActions;
+
+      // 🔥 REDUNDANCY CHECK: Skip if this call is already active to prevent double signal
+      if (callSession && callSession.callId === callId && callSession.status === 'ACTIVE') {
+        clearPendingCallActions();
+        return;
+      }
+
+      if (pendingCallActions.answered) {
+        setCallSession({
+          callUUID: callUUID || undefined,
+          callId: callId!,
+          channelName: `call_${callId}`,
+          caller: { id: callerId || 'unknown', name: callerName || 'Someone' },
+          receiver: { id: currentUserId, name: user.name, profileImage: user.profileImage },
+          type: callType || 'audio',
+          status: 'ACTIVE'
+        });
+        setIsAudioActivated(true); // Must be true for background answers
+
+        if (socket.connected && !acceptedCallIds.current.has(callId)) {
+          console.log('🚀 [CallContext] Signalling accept for memory sync:', callId);
+          socket.emit('call:accept', { callId: callId!, callerId: callerId || 'unknown' });
+          acceptedCallIds.current.add(callId);
+        }
+      } else if (pendingCallActions.tapped) {
+        setCallSession({
+          callUUID: callUUID || undefined,
+          callId: callId!,
+          channelName: `call_${callId}`,
+          caller: { id: callerId || 'unknown', name: callerName || 'Someone' },
+          receiver: { id: currentUserId, name: user.name, profileImage: user.profileImage },
+          type: callType || 'audio',
+          status: 'INCOMING'
+        });
+      } else if (pendingCallActions.declined) {
+        socket.emit('call:decline', {
+          callId: callId!,
+          callerId: callerId || 'unknown'
+        });
+      }
       clearPendingCallActions();
     }
   }, [socket, user, currentUserId]);
@@ -173,6 +225,11 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       subscription.remove();
     };
   }, [processPendingActions]);
+
+  // Sync Ref with state
+  useEffect(() => {
+    activeCallIdRef.current = callSession?.callId || null;
+  }, [callSession?.callId]);
 
   // Handlers for Socket Events
   useEffect(() => {
@@ -201,14 +258,19 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
         status: 'INCOMING',
       });
 
-      // Show Native Call UI ONLY if app is in background
+      // Show Native Call UI ONLY if app is in background and NOT already displayed
       if (AppState.currentState !== 'active') {
-        console.log('📱 [CallContext] App is not active, showing native CallKeep UI.');
-        CallKeepService.displayIncomingCall(
-          callUUID,
-          mappedCaller.name,
-          mappedCaller.name
-        );
+        if (!displayedCallIds.current.has(data.callId)) {
+          console.log(`📱 [CallContext] Showing native CallKeep UI for ${data.callId}`);
+          displayedCallIds.current.add(data.callId);
+          CallKeepService.displayIncomingCall(
+            callUUID,
+            mappedCaller.name,
+            mappedCaller.name
+          );
+        } else {
+          console.log(`🛡️ [CallContext] Native UI already displayed for ${data.callId}, skipping duplicate.`);
+        }
       } else {
         console.log('📱 [CallContext] App is active, skipping native CallKeep UI (In-app UI will handle it).');
       }
@@ -225,14 +287,35 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
     // 3. Call Declined/Cancelled/Ended
     const handleCallEnd = (data: { callId: string, reason?: string }) => {
-      console.log('🛑 [CallContext] Call ended/declined:', data.reason || 'Terminated');
+      const now = Date.now();
+      console.log(`[DEBUG/Client] Received ${data.reason || 'termination'} signal from socket for callId: ${data.callId}`);
+
+      // 🛡️ SECURITY: ONLY clear session if callId matches
+      // Use Ref here to avoid stale closure issues.
+      if (!activeCallIdRef.current || activeCallIdRef.current !== data.callId) {
+        console.log(`🛡️ [CallContext] Ignored termination for ${data.callId} - Active match is ${activeCallIdRef.current || 'NULL'}.`);
+        return;
+      }
+
+      // 🛡️ RE-RINGING GUARD: If we just had a termination, ignore duplicates for 2s
+      if (now - lastTerminationTime.current < 2000) {
+        console.log('[DEBUG/Client] Debouncing termination signal (too frequent).');
+        return;
+      }
+
+      lastTerminationTime.current = now;
+      console.log(`🛑 [CallContext] Call ended/declined: ${data.reason || 'Terminated'}`);
       if (callSession?.callUUID) {
         CallKeepService.endCall(callSession.callUUID);
       }
-      
+
       // Production fix: Clear lingering notifications
       NotificationService.getInstance().cancelAllCallNotifications();
-      
+      setIsAudioActivated(false);
+      if (data.callId) {
+        acceptedCallIds.current.delete(data.callId);
+        displayedCallIds.current.delete(data.callId);
+      }
       setCallSession(null);
     };
 
@@ -246,7 +329,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       const callerIdStr = data.callerId?._id || data.callerId?.id || data.callerId;
       const receiverIdStr = data.receiverId?._id || data.receiverId?.id || data.receiverId;
       const recId = callerIdStr === currentUserId ? receiverIdStr : currentUserId;
-      
+
       const receiverData = data.receiverId?._id ? data.receiverId : { id: receiverIdStr, name: 'User' };
 
       setCallSession({
@@ -270,8 +353,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     // 5. Call Request Sent (Confirmation to Caller)
     socket.on('call:request_sent', (data: { callId: string }) => {
       console.log('📡 [CallContext] Call request confirmed by server:', data.callId);
-      setCallSession(prev => prev ? { 
-        ...prev, 
+      setCallSession(prev => prev ? {
+        ...prev,
         callId: data.callId,
         channelName: `call_${data.callId}`
       } : null);
@@ -294,15 +377,30 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, [socket, user, currentUserId]);
 
+  // 📡 AUTO-SIGNAL SYNC: Ensure if we recovered a session while socket was offline,
+  // we emit the accept event as soon as the socket connects.
+  useEffect(() => {
+    if (socket?.connected && callSession?.status === 'ACTIVE' && callSession.callId) {
+      if (!acceptedCallIds.current.has(callSession.callId)) {
+        console.log(`📡 [CallContext] Auto-syncing accept for active call: ${callSession.callId}`);
+        socket.emit('call:accept', {
+          callId: callSession.callId,
+          callerId: callSession.caller.id
+        });
+        acceptedCallIds.current.add(callSession.callId);
+      }
+    }
+  }, [socket?.connected, callSession?.status, callSession?.callId]);
+
   // Navigate when call state changes - Enhanced with retry for cold start
   useEffect(() => {
     let timeoutId: any;
-    
+
     const tryNavigate = () => {
       if (!callSession?.status) return;
 
       console.log(`🧭 [CallContext] Attempting navigation for status: ${callSession.status}`);
-      
+
       if (callSession.status === 'INCOMING') {
         const success = navigate('IncomingCall', {});
         if (!success) {
@@ -312,7 +410,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       } else if (callSession.status === 'ACTIVE' || callSession.status === 'OUTGOING') {
         const success = navigate('ActiveCall', {});
         if (!success) {
-           timeoutId = setTimeout(tryNavigate, 1000);
+          timeoutId = setTimeout(tryNavigate, 1000);
         }
       }
     };
@@ -328,26 +426,26 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!socket) return;
     console.log(`📞 [CallContext] Initiating ${type} call to ${receiverId}`);
     socket.emit('call:request', { receiverId, type });
-    
+
     const callUUID = generateUUID();
     setIsAudioActivated(false);
 
     setCallSession({
-        callUUID,
-        callId: 'loading',
-        channelName: '',
-        caller: {
-          id: currentUserId,
-          name: user?.name || '',
-          profileImage: user?.profileImage
-        },
-        receiver: {
-          id: receiverId,
-          name: name,
-          profileImage: image
-        },
-        type,
-        status: 'OUTGOING'
+      callUUID,
+      callId: 'loading',
+      channelName: '',
+      caller: {
+        id: currentUserId,
+        name: user?.name || '',
+        profileImage: user?.profileImage
+      },
+      receiver: {
+        id: receiverId,
+        name: name,
+        profileImage: image
+      },
+      type,
+      status: 'OUTGOING'
     });
 
     // Notify CallKeep about outgoing call
@@ -355,33 +453,87 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [socket, user, currentUserId]);
 
   const acceptCall = useCallback(() => {
-    if (!socket || !callSession) return;
-    
-    // Clear notifications immediately
-    NotificationService.getInstance().cancelAllCallNotifications();
+    if (!socket || !callSession) {
+      console.warn('⚠️ [CallContext] Cannot accept call: session not ready. Queuing accept...');
+      pendingAcceptRef.current = true;
+      return;
+    }
 
-    socket.emit('call:accept', { 
-        callId: callSession.callId, 
-        callerId: callSession.caller.id 
-    });
+    const { callId, caller } = callSession;
+
+    if (callSession.status === 'ACTIVE' && acceptedCallIds.current.has(callId)) {
+      console.log(`[DEBUG/Client] acceptCall called but already fully active for ${callId}. Skipping signal.`);
+    } else {
+      console.log(`[DEBUG/Client] Proceeding with call acceptance for ${callId}. Socket connected: ${socket.connected}`);
+
+      // 1. Emit accept event immediately (Signal the server)
+      if (!acceptedCallIds.current.has(callId)) {
+        console.log(`[DEBUG/Client] Emitting call:accept for ${callId} to server.`);
+        socket.emit('call:accept', {
+          callId: callId,
+          callerId: caller.id
+        });
+        acceptedCallIds.current.add(callId);
+      } else {
+        console.log(`[DEBUG/Client] call:accept already emitted for ${callId}. Skipping emission.`);
+      }
+    }
+
+    // 2. Clear notifications
+    try {
+      NotificationService.getInstance().cancelAllCallNotifications();
+    } catch (err) {
+      console.warn('⚠️ [CallContext] Notification cleanup failed (non-critical):', err);
+    }
+
+    // 3. Update local state
     setCallSession(prev => prev ? { ...prev, status: 'ACTIVE' } : null);
-    // Note: CallKeep answer is usually handled via callback, 
-    // but if triggered from UI, we might need to notify it back if not already.
+
+    // 4. 🔥 CRITICAL FOR iOS FOREGROUND: Since we bypassed CallKit UI, 
+    // manual accept must activate audio immediately.
+    setIsAudioActivated(true);
+
+    // 5. Clear storage immediately to prevent re-processing on next foreground
+    const cleanup = async () => {
+      try {
+        await AsyncStorage.multiRemove(['@pending_call_action', '@pending_call_data']);
+        console.log('🧹 [CallContext] Atomic storage cleanup successful');
+      } catch (e) {
+        console.error('❌ [CallContext] Cleanup error:', e);
+      }
+    };
+    cleanup();
+
+    console.log(`✅ [CallContext] Accept event emitted for call ${callId}`);
   }, [socket, callSession]);
 
   const declineCall = useCallback(() => {
-    if (!socket || !callSession) return;
+    if (!socket || !callSession) {
+      console.log('[DEBUG/Client] declineCall called but socket or session is missing.');
+      return;
+    }
 
+    console.log(`[DEBUG/Client] declineCall executed for callId: ${callSession.callId}`);
     // Clear notifications immediately
     NotificationService.getInstance().cancelAllCallNotifications();
 
-    socket.emit('call:decline', { 
-        callId: callSession.callId, 
-        callerId: callSession.caller.id 
+    socket.emit('call:decline', {
+      callId: callSession.callId,
+      callerId: callSession.caller.id
     });
     if (callSession.callUUID) {
       CallKeepService.endCall(callSession.callUUID);
     }
+    // Stop audio session
+    try {
+      const InCallManager = require('react-native-incall-manager').default;
+      if (InCallManager && typeof InCallManager.stop === 'function') {
+        InCallManager.stop();
+      }
+    } catch (e) {
+      console.warn('⚠️ [CallContext] InCallManager stop failed:', e);
+    }
+    setIsAudioActivated(false);
     setCallSession(null);
   }, [socket, callSession]);
 
@@ -391,13 +543,14 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     // Clear notifications immediately
     NotificationService.getInstance().cancelAllCallNotifications();
 
-    socket.emit('call:cancel', { 
-        callId: callSession.callId, 
-        receiverId: callSession.receiver.id
+    socket.emit('call:cancel', {
+      callId: callSession.callId,
+      receiverId: callSession.receiver.id
     });
     if (callSession.callUUID) {
       CallKeepService.endCall(callSession.callUUID);
     }
+    setIsAudioActivated(false);
     setCallSession(null);
   }, [socket, callSession]);
 
@@ -417,32 +570,61 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     // Clear notifications immediately
     NotificationService.getInstance().cancelAllCallNotifications();
 
-    const otherUserId = callSession.caller.id === currentUserId 
-        ? callSession.receiver.id 
-        : callSession.caller.id;
+    const otherUserId = callSession.caller.id === currentUserId
+      ? callSession.receiver.id
+      : callSession.caller.id;
 
-    socket.emit('call:end', { 
-        callId: callSession.callId, 
-        otherUserId 
+    socket.emit('call:end', {
+      callId: callSession.callId,
+      otherUserId
     });
     if (callSession.callUUID) {
       CallKeepService.endCall(callSession.callUUID);
     }
+    // Stop audio session
+    try {
+      const InCallManager = require('react-native-incall-manager').default;
+      if (InCallManager && typeof InCallManager.stop === 'function') {
+        InCallManager.stop();
+      }
+    } catch (e) {
+      console.warn('⚠️ [CallContext] InCallManager stop failed:', e);
+    }
+
+    setIsAudioActivated(false);
     setCallSession(null);
   }, [socket, callSession, currentUserId, cancelCall, declineCall]);
 
-  // Initial CallKeep configuration
+  // Refs for current handlers to avoid re-running setup when accepted/ended
+  const acceptCallRef = useRef(acceptCall);
+  const endCallRef = useRef(endCall);
+
+  useEffect(() => {
+    acceptCallRef.current = acceptCall;
+    endCallRef.current = endCall;
+  }, [acceptCall, endCall]);
+
+  // Initial CallKeep configuration (Setup ONCE)
   useEffect(() => {
     const initCallKeep = async () => {
+      console.log('🛠️ [CallContext] Initializing CallKeep configuration...');
       await CallKeepService.setup({
         onAnswerCall: ({ callUUID }) => {
-          console.log('📞 [CallKeep] Answered call:', callUUID);
-          acceptCall();
+          console.log('📞 [CallKeep] Answered call callback triggered for:', callUUID);
+          // 🛡️ PERSIST ANSWER STATE: Ensure if app is launching, it knows it was answered
+          AsyncStorage.mergeItem('@pending_call_data', JSON.stringify({ action: 'answered' })).catch(() => { });
+          acceptCallRef.current();
           CallKeepService.backToForeground();
         },
         onEndCall: ({ callUUID }) => {
-          console.log('🛑 [CallKeep] Ended call:', callUUID);
-          endCall();
+          console.log(`🛑 [CallKeep] Ended call callback triggered for: ${callUUID}`);
+          // 🛡️ STALE SIGNAL GUARD: If we are already active or in the middle of answering, 
+          // ignore late CallKit termination calls that might come from duplicate UI windows.
+          if (activeCallIdRef.current && (pendingAcceptRef.current || acceptedCallIds.current.size > 0)) {
+            console.log('🛡️ [CallKeep] Ignoring stale endCall signal during active/answer phase.');
+            return;
+          }
+          endCallRef.current();
         },
         onActivateAudioSession: () => {
           console.log('🔊 [CallKeep] Audio Session Activated');
@@ -451,24 +633,22 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
         onShowIncomingCallUi: () => {
           console.log('📱 [CallKeep] Show Incoming Call UI');
           CallKeepService.backToForeground();
-          // The status is already INCOMING, so navigate listener will handle it, 
-          // but we can force it here too.
           navigate('IncomingCall', {});
         },
       });
     };
     initCallKeep();
-  }, [acceptCall, endCall]);
+  }, []); // Run ONLY once on mount
 
   return (
-    <CallContext.Provider value={{ 
-        callSession, 
-        initiateCall, 
-        acceptCall, 
-        declineCall, 
-        cancelCall, 
-        endCall,
-        isAudioActivated
+    <CallContext.Provider value={{
+      callSession,
+      initiateCall,
+      acceptCall,
+      declineCall,
+      cancelCall,
+      endCall,
+      isAudioActivated
     }}>
       {children}
     </CallContext.Provider>

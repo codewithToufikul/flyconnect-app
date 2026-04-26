@@ -59,6 +59,7 @@ class NotificationService {
   private static instance: NotificationService;
   private voipToken: string | null = null;
   private isVoIPInitialized: boolean = false;
+  private static displayedCallIds: Set<string> = new Set();
 
   private constructor() {}
 
@@ -183,18 +184,21 @@ class NotificationService {
           }
         }
 
-        // Display native CallKit UI ONLY if app is in background/killed state
+        // Display native CallKit UI ONLY if app is in background/killed state AND not already displayed
         if (AppState.currentState !== 'active') {
-          console.log(
-            '🍎 [VoIP] App is in background/killed, showing CallKit UI.',
-          );
-          RNCallKeep.displayIncomingCall(
-            uuid,
-            callerName || 'Incoming Call',
-            callerName || 'Someone',
-            'generic',
-            callType === 'video',
-          );
+          if (!NotificationService.displayedCallIds.has(callId)) {
+            console.log('🍎 [VoIP] App is in background/killed, showing CallKit UI.');
+            NotificationService.displayedCallIds.add(callId);
+            RNCallKeep.displayIncomingCall(
+              uuid,
+              callerName || 'Incoming Call',
+              callerName || 'Someone',
+              'generic',
+              callType === 'video',
+            );
+          } else {
+            console.log(`🛡️ [VoIP] CallKit UI for ${callId} already displayed, skipping duplicate.`);
+          }
         } else {
           console.log(
             '🍎 [VoIP] App is in foreground, skipping CallKit UI (Custom UI will handle it).',
@@ -536,6 +540,7 @@ class NotificationService {
    * Helper to clear all call notifications
    */
   async cancelAllCallNotifications() {
+    NotificationService.displayedCallIds.clear();
     await notifee.cancelAllNotifications();
   }
 }

@@ -110,9 +110,10 @@ class CallKeepService {
   }
 
   endCall(uuid: string) {
-    console.log('🛑 [CallKeep] Ending Call:', uuid);
+    if (!uuid) return;
+    console.log('🛑 [CallKeep] Ending Specific Call:', uuid);
     try {
-      RNCallKeep.endAllCalls();
+      RNCallKeep.endCall(uuid);
     } catch (e) {
       console.error('❌ [CallKeep] End Call Failed:', e);
     }

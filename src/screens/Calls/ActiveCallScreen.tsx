@@ -316,11 +316,7 @@ const ActiveCallScreen = () => {
     }
 
     return () => {
-      console.log('🧹 [Agora/InCallManager] Releasing Lifecycle');
-      try {
-        InCallManager.stop();
-      } catch (e) { }
-
+      console.log('🧹 [Agora] Releasing Engine...');
       if (engine.current) {
         stopRingback();
         engine.current.leaveChannel();
@@ -334,6 +330,9 @@ const ActiveCallScreen = () => {
 
   useEffect(() => {
     const join = async () => {
+      // ✅ PRODUCTION FIX: On iOS, we need to be careful with audio readiness.
+      // If we are in the foreground, the context sets isAudioActivated manually.
+      // If we are coming from CallKeep (background), we wait for the OS callback.
       const isAudioReady = Platform.OS === 'android' ? true : isAudioActivated;
 
       if (isEngineReady && engine.current && token && appId && localUid && !isJoined && isAudioReady) {

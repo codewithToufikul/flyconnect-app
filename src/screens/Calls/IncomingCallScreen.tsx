@@ -42,21 +42,23 @@ const IncomingCallScreen = () => {
     Vibration.vibrate(VIBRATE_PATTERN, true);
     
     return () => {
-      console.log('🔇 [IncomingCallScreen] Stopping Ringtone Session');
-      setIsPlaying(false);
+      console.log('🔇 [IncomingCallScreen] Cleaning up IncomingCallScreen handlers');
       Vibration.cancel();
-      InCallManager.stop();
+      // NOTE: We do NOT call InCallManager.stop() here because it might 
+      // kill the audio session for the active call we are about to join.
     };
   }, []);
 
   const handleAccept = () => {
+    console.log('✅ [IncomingCallScreen] Accept pressed');
     setIsPlaying(false);
     Vibration.cancel();
-    InCallManager.stop();
+    // Do NOT stop InCallManager here, let it transition to active call
     acceptCall();
   };
 
   const handleDecline = () => {
+    console.log('❌ [IncomingCallScreen] Decline pressed');
     setIsPlaying(false);
     Vibration.cancel();
     InCallManager.stop();

@@ -6,6 +6,7 @@ import DocumentPicker, {
   DocumentPickerResponse,
   types,
 } from 'react-native-document-picker';
+import {Platform} from 'react-native';
 import RNBlobUtil from 'react-native-blob-util';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ class MediaService {
         compressImageQuality: 0.7,
         compressImageMaxWidth: 1200,
         compressImageMaxHeight: 1200,
+        cropping: false, // Ensure cropping is disabled to avoid extra permission needs
       });
 
       const resized = await ImageResizer.createResizedImage(
@@ -109,7 +111,13 @@ class MediaService {
 
   async pickVideo(): Promise<PickedMedia | null> {
     try {
-      const video = await ImagePicker.openPicker({mediaType: 'video'});
+      console.log('🎬 Opening video picker...');
+      const video = await ImagePicker.openPicker({
+        mediaType: 'video',
+        cropping: false,
+        compressVideoPreset: Platform.OS === 'ios' ? 'MediumQuality' : undefined,
+      });
+      console.log('🎬 Video picked:', video.path);
 
       let thumbnailUri: string | undefined;
       try {

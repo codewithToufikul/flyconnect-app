@@ -7,21 +7,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {Platform} from 'react-native';
 
 // ============================================
-// BASE URL CONFIGURATION
+// BASE URL CONFIGURATION1
 // ============================================
-
-const USE_LOCAL_SERVER = true; // Set to false to use Render
 
 const PRODUCTION_URL = 'https://connect.flybook.com.bd';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://192.168.1.192:10000', // Updated local IP address
-  ios: 'http://192.168.1.192:10000',
-  default: 'http://192.168.1.192:10000',
+  android: 'http://192.168.1.195:10000',
+  ios: 'http://192.168.1.195:10000',
+  default: 'http://192.168.1.195:10000',
 });
 
-export const BASE_URL = USE_LOCAL_SERVER ? LOCAL_URL : PRODUCTION_URL;
+// Automatically use Local during development and Production in released app
+export const BASE_URL = __DEV__ ? LOCAL_URL : PRODUCTION_URL;
 
 // Storage keys
 const TOKEN_KEY = '@flyconnect_token';

@@ -16,6 +16,7 @@ const HomeScreen = ({ navigation }: any) => {
     const { user: currentUser } = useProfile();
     const { conversations, refreshInbox } = useInbox();
     const [refreshing, setRefreshing] = useState(false);
+    const [activeTab, setActiveTab] = useState<'personal' | 'social'>('personal');
 
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
@@ -62,8 +63,13 @@ const HomeScreen = ({ navigation }: any) => {
         return () => sub.remove();
     }, [navigation]);
 
+    const filteredConversations = conversations.filter(conv => {
+        if (activeTab === 'social') return conv.category === 'social_response';
+        return !conv.category || conv.category === 'normal';
+    });
+
     const renderRecentActivity = () => {
-        if (conversations.length === 0) {
+        if (filteredConversations.length === 0) {
             return (
                 <View style={styles.emptyState}>
                     <Icon name="chatbubbles-outline" size={80} color="#F3F4F6" />
@@ -72,7 +78,7 @@ const HomeScreen = ({ navigation }: any) => {
             );
         }
 
-        return conversations.map((conv) => {
+        return filteredConversations.map((conv) => {
             const currentUserId = currentUser?.id || (currentUser as any)?._id;
             const myIdStr = currentUserId?.toString();
 
@@ -210,6 +216,28 @@ const HomeScreen = ({ navigation }: any) => {
                     />
                 </TouchableOpacity>
             </View>
+            <View style={styles.tabContainer}>
+                <TouchableOpacity 
+                    style={[styles.tab, activeTab === 'personal' && styles.activeTab]}
+                    onPress={() => setActiveTab('personal')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'personal' && styles.activeTabText]}>Personal</Text>
+                    {conversations.filter(c => !c.category || c.category === 'normal').some(c => {
+                        const myId = currentUser?.id || (currentUser as any)?._id;
+                        return c.unreadCount?.[myId?.toString()] > 0;
+                    }) && <View style={styles.tabDot} />}
+                </TouchableOpacity>
+                <TouchableOpacity 
+                    style={[styles.tab, activeTab === 'social' && styles.activeTab]}
+                    onPress={() => setActiveTab('social')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'social' && styles.activeTabText]}>Social Response</Text>
+                    {conversations.filter(c => c.category === 'social_response').some(c => {
+                        const myId = currentUser?.id || (currentUser as any)?._id;
+                        return c.unreadCount?.[myId?.toString()] > 0;
+                    }) && <View style={[styles.tabDot, { backgroundColor: '#8B5CF6' }]} />}
+                </TouchableOpacity>
+            </View>
 
             <ScrollView
                 contentContainerStyle={styles.scrollContent}
@@ -253,6 +281,38 @@ const styles = StyleSheet.create({
         paddingTop: 60,
         paddingBottom: 20,
         backgroundColor: '#FFFFFF',
+    },
+    tabContainer: {
+        flexDirection: 'row',
+        paddingHorizontal: 20,
+        marginBottom: 10,
+        gap: 12,
+    },
+    tab: {
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        borderRadius: 20,
+        backgroundColor: '#F3F4F6',
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    activeTab: {
+        backgroundColor: Colors.primary,
+    },
+    tabText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#6B7280',
+    },
+    activeTabText: {
+        color: '#FFFFFF',
+    },
+    tabDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#EF4444',
+        marginLeft: 6,
     },
     headerAvatar: {
         width: 40,
