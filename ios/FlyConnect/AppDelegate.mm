@@ -3,8 +3,8 @@
 #import <Firebase.h>
 #import <RNVoipPushNotificationManager.h>
 #import <React/RCTLog.h>
-
 #import <React/RCTBundleURLProvider.h>
+#import <React/RCTLinkingManager.h>
 
 @implementation AppDelegate
 
@@ -98,6 +98,23 @@
 #else
   return [[NSBundle mainBundle] URLForResource:@"main" withExtension:@"jsbundle"];
 #endif
+}
+
+// ── Deep Linking: Custom URL Scheme (flyconnect://) ──
+- (BOOL)application:(UIApplication *)application
+            openURL:(NSURL *)url
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options
+{
+  RCTLogInfo(@"🔗 [AppDelegate] openURL: %@", url.absoluteString);
+  return [RCTLinkingManager application:application openURL:url options:options];
+}
+
+// ── Deep Linking: Universal Links ──
+- (BOOL)application:(UIApplication *)application
+continueUserActivity:(NSUserActivity *)userActivity
+ restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler
+{
+  return [RCTLinkingManager application:application continueUserActivity:userActivity restorationHandler:restorationHandler];
 }
 
 @end

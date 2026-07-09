@@ -11,6 +11,7 @@ import { get, declineCallAPI } from './src/services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ToastProvider } from './src/context/ToastContext';
 import InAppToast from './src/components/InAppToast';
+import FloatingCallWidget from './src/components/FloatingCallWidget';
 import { InboxProvider } from './src/context/InboxContext';
 import notifee from '@notifee/react-native';
 
@@ -177,6 +178,8 @@ const App = () => {
                   <AppNavigator />
                   <InAppToast />
                 </NavigationContainer>
+                {/* Floating minimized call widget — overlays everything */}
+                <FloatingCallWidget />
               </InboxProvider>
             </CallProvider>
           </SocketProvider>

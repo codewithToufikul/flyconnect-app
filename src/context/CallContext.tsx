@@ -47,6 +47,8 @@ interface CallContextType {
   cancelCall: () => void;
   endCall: () => void;
   isAudioActivated: boolean;
+  isMinimized: boolean;
+  setIsMinimized: (minimized: boolean) => void;
 }
 
 const CallContext = createContext<CallContextType | undefined>(undefined);
@@ -56,6 +58,14 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [callSession, setCallSession] = useState<CallSession | null>(null);
   const [isAudioActivated, setIsAudioActivated] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  
+  // Auto reset minimized state when call ends
+  useEffect(() => {
+    if (!callSession) {
+      setIsMinimized(false);
+    }
+  }, [callSession]);
   const { socket } = useSocket();
   const { user } = useProfile();
   const isProcessingActions = useRef(false);
@@ -165,7 +175,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
     // 2. Check Memory Store (For Background -> Foreground transitions while app process stayed alive)
     if (pendingCallActions.callId) {
-      const { action, callId, callerName, callerId, callUUID, callType } = pendingCallActions;
+      const { callId, callerName, callerId, callUUID, callType } = pendingCallActions;
+      const action = pendingCallActions.answered ? 'answered' : pendingCallActions.tapped ? 'tapped' : pendingCallActions.declined ? 'declined' : null;
 
       // 🔥 REDUNDANCY CHECK: Skip if this call is already active to prevent double signal
       if (callSession && callSession.callId === callId && callSession.status === 'ACTIVE') {
@@ -399,7 +410,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     const tryNavigate = () => {
       if (!callSession?.status) return;
 
-      console.log(`🧭 [CallContext] Attempting navigation for status: ${callSession.status}`);
+      console.log(`🧭 [CallContext] Attempting navigation for status: ${callSession.status}, isMinimized: ${isMinimized}`);
 
       if (callSession.status === 'INCOMING') {
         const success = navigate('IncomingCall', {});
@@ -408,6 +419,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
           timeoutId = setTimeout(tryNavigate, 1000);
         }
       } else if (callSession.status === 'ACTIVE' || callSession.status === 'OUTGOING') {
+        if (isMinimized) {
+          console.log('🛡️ [CallContext] Call is minimized, skipping full screen navigation');
+          return;
+        }
         const success = navigate('ActiveCall', {});
         if (!success) {
           timeoutId = setTimeout(tryNavigate, 1000);
@@ -420,7 +435,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [callSession?.status]);
+  }, [callSession?.status, isMinimized]);
 
   const initiateCall = useCallback((receiverId: string, type: 'audio' | 'video', name: string, image?: string) => {
     if (!socket) return;
@@ -648,7 +663,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       declineCall,
       cancelCall,
       endCall,
-      isAudioActivated
+      isAudioActivated,
+      isMinimized,
+      setIsMinimized
     }}>
       {children}
     </CallContext.Provider>

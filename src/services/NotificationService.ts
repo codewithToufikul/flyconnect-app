@@ -26,6 +26,11 @@ const generateUUID = () => {
 async function ensureAndroidChannels() {
   if (Platform.OS !== 'android') return;
   try {
+    // Force-delete Calls channel on app init to update its sound/vibration configuration
+    try {
+      await notifee.deleteChannel(CALL_CHANNEL_ID);
+    } catch (_) {}
+
     // Chat Channel
     await notifee.createChannel({
       id: CHAT_CHANNEL_ID,
@@ -48,7 +53,7 @@ async function ensureAndroidChannels() {
     });
 
     console.log(
-      '✅ [NotificationService] Android notification channels ensured.',
+      '✅ [NotificationService] Android notification channels ensured (Calls channel recreated).',
     );
   } catch (e) {
     console.error('❌ [NotificationService] Failed to create channels:', e);

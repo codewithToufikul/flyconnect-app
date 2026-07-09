@@ -9,13 +9,14 @@ import {
   Dimensions,
   StatusBar,
   Linking,
+  Alert,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { Colors, Shadows } from '../../theme/theme';
 import { useCall } from '../../context/CallContext';
 import { useInbox } from '../../context/InboxContext';
 import { useProfile } from '../../context/ProfileContext';
-import { post } from '../../services/api';
+import { post, blockUserAPI, unblockUserAPI } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -25,12 +26,67 @@ const ChatDetailScreen = ({ route, navigation }: any) => {
   const { user, conversationId } = route.params;
   const { initiateCall } = useCall();
   const { conversations, updateConversationLocally } = useInbox();
-  const { user: currentUser } = useProfile();
+  const { user: currentUser, updateUserLocally } = useProfile();
   const { showToast } = useToast();
 
   const conversation = conversations.find(c => (c._id || c.id)?.toString() === conversationId?.toString());
   const myId = (currentUser?.id || (currentUser as any)?._id)?.toString();
   const isMuted = conversation?.mutedBy?.some((id: any) => id.toString() === myId);
+  const isBlocked = currentUser?.blockedUsers?.some(id => id?.toString() === (user?._id || user?.id)?.toString());
+  const amIBlocked = user?.amIBlocked;
+  const showCallButtons = !isBlocked && !amIBlocked;
+
+  const handleBlockToggle = async () => {
+    const targetUserId = user?._id || user?.id;
+    if (!targetUserId) return;
+
+    if (isBlocked) {
+      try {
+        const response = await unblockUserAPI(targetUserId);
+        if (response.success) {
+          const updatedBlocks = currentUser?.blockedUsers?.filter(id => id !== targetUserId) || [];
+          updateUserLocally({ blockedUsers: updatedBlocks });
+          showToast({
+            senderName: 'System',
+            message: 'User unblocked',
+            conversationId: conversationId || '',
+            contentType: 'text'
+          });
+        }
+      } catch (err) {
+        Alert.alert('Error', 'Failed to unblock user');
+      }
+    } else {
+      Alert.alert(
+        'Block User',
+        `Are you sure you want to block ${user.name}? They will no longer be able to message or call you.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Block',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                const response = await blockUserAPI(targetUserId);
+                if (response.success) {
+                  const updatedBlocks = [...(currentUser?.blockedUsers || []), targetUserId];
+                  updateUserLocally({ blockedUsers: updatedBlocks });
+                  showToast({
+                    senderName: 'System',
+                    message: 'User blocked',
+                    conversationId: conversationId || '',
+                    contentType: 'text'
+                  });
+                }
+              } catch (err) {
+                Alert.alert('Error', 'Failed to block user');
+              }
+            }
+          }
+        ]
+      );
+    }
+  };
 
   const toggleMute = async () => {
     if (!conversationId) return;
@@ -66,7 +122,7 @@ const ChatDetailScreen = ({ route, navigation }: any) => {
 
   const privacyOptions = [
     { id: 'p1', title: 'Notifications & Sounds', icon: 'notifications', color: '#6B7280' },
-    { id: 'p2', title: 'Block', icon: 'ban', color: '#EF4444' },
+    { id: 'p2', title: isBlocked ? 'Unblock' : 'Block', icon: 'ban', color: '#EF4444' },
     { id: 'p3', title: 'Report', icon: 'alert-circle', color: '#EF4444' },
   ];
 
@@ -78,9 +134,6 @@ const ChatDetailScreen = ({ route, navigation }: any) => {
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Icon name="arrow-back" size={24} color="#111827" />
-        </TouchableOpacity>
-        <TouchableOpacity>
-          <Icon name="ellipsis-vertical" size={20} color="#111827" />
         </TouchableOpacity>
       </View>
 
@@ -95,33 +148,39 @@ const ChatDetailScreen = ({ route, navigation }: any) => {
             {user.isOnline && <View style={styles.onlineDot} />}
           </View>
           <Text style={styles.userName}>{user.name}</Text>
-          <Text style={styles.userStatus}>
-            {user.isOnline ? 'Active Now' : 'Offline'}
-          </Text>
+          {(!isBlocked && !amIBlocked) && (
+            <Text style={styles.userStatus}>
+              {user.isOnline ? 'Active Now' : 'Offline'}
+            </Text>
+          )}
 
           {/* Action Buttons */}
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={() => initiateCall(user._id || user.id, 'audio', user.name, user.profileImage)}
-            >
-              <View style={styles.iconCircle}>
-                <Icon name="call" size={22} color="#111827" />
-              </View>
-              <Text style={styles.actionLabel}>Audio</Text>
-            </TouchableOpacity>
+            {showCallButtons && (
+              <>
+                <TouchableOpacity
+                  style={styles.actionItem}
+                  onPress={() => initiateCall(user._id || user.id, 'audio', user.name, user.profileImage)}
+                >
+                  <View style={styles.iconCircle}>
+                    <Icon name="call" size={22} color="#111827" />
+                  </View>
+                  <Text style={styles.actionLabel}>Audio</Text>
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.actionItem}
-              onPress={() => initiateCall(user._id || user.id, 'video', user.name, user.profileImage)}
-            >
-              <View style={styles.iconCircle}>
-                <Icon name="videocam" size={22} color="#111827" />
-              </View>
-              <Text style={styles.actionLabel}>Video</Text>
-            </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionItem}
+                  onPress={() => initiateCall(user._id || user.id, 'video', user.name, user.profileImage)}
+                >
+                  <View style={styles.iconCircle}>
+                    <Icon name="videocam" size={22} color="#111827" />
+                  </View>
+                  <Text style={styles.actionLabel}>Video</Text>
+                </TouchableOpacity>
+              </>
+            )}
 
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.actionItem}
               onPress={() => navigation.navigate('Profile', { userId: user._id || user.id })}
             >
@@ -129,17 +188,17 @@ const ChatDetailScreen = ({ route, navigation }: any) => {
                 <Icon name="person" size={22} color="#111827" />
               </View>
               <Text style={styles.actionLabel}>Profile</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.actionItem}
               onPress={toggleMute}
             >
               <View style={[styles.iconCircle, isMuted && { backgroundColor: '#FEE2E2' }]}>
-                <Icon 
-                  name={isMuted ? "notifications-off" : "notifications"} 
-                  size={22} 
-                  color={isMuted ? "#EF4444" : "#111827"} 
+                <Icon
+                  name={isMuted ? "notifications-off" : "notifications"}
+                  size={22}
+                  color={isMuted ? "#EF4444" : "#111827"}
                 />
               </View>
               <Text style={[styles.actionLabel, isMuted && { color: '#EF4444' }]}>
@@ -165,7 +224,17 @@ const ChatDetailScreen = ({ route, navigation }: any) => {
         <View style={styles.listSection}>
           <Text style={styles.sectionTitle}>Privacy & Support</Text>
           {privacyOptions.map((item) => (
-            <TouchableOpacity key={item.id} style={styles.listItem}>
+            <TouchableOpacity
+              key={item.id}
+              style={styles.listItem}
+              onPress={() => {
+                if (item.title === 'Report') {
+                  navigation.navigate('Report', { user });
+                } else if (item.title === 'Block' || item.title === 'Unblock') {
+                  handleBlockToggle();
+                }
+              }}
+            >
               <View style={[styles.listIconBg, { backgroundColor: '#F3F4F6' }]}>
                 <Icon name={item.icon} size={20} color={item.color} />
               </View>

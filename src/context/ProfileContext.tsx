@@ -10,6 +10,7 @@ interface User {
     userName?: string;
     role?: string;
     verificationStatus?: boolean;
+    blockedUsers?: string[];
 }
 
 interface ProfileContextType {

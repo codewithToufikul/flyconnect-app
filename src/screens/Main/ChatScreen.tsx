@@ -113,7 +113,7 @@ function formatSafeTime(dateStr: string | Date): string {
 const EMOJIS = ['❤️', '😂', '😮', '😢', '😡', '👍', '🙌'];
 
 const ChatScreen = ({ route, navigation }: any) => {
-    const { user: initialUser, userId: deepLinkedUserId } = route.params || {};
+    const { user: initialUser, userId: deepLinkedUserId, canCall } = route.params || {};
     const [otherUser, setOtherUser] = useState<any>(initialUser);
     const [loadingUser, setLoadingUser] = useState(!initialUser && !!deepLinkedUserId);
 
@@ -186,6 +186,7 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const otherUserId = (otherUser as any)?._id || (otherUser as any)?.id || deepLinkedUserId;
     const currentUserId = (currentUser as any)?._id || (currentUser as any)?.id;
+    const isBlocked = currentUser?.blockedUsers?.some(id => id?.toString() === otherUserId?.toString());
 
     const flatListRef = useRef<FlatList>(null);
     const progressAnim = useRef(new Animated.Value(0)).current;
@@ -260,6 +261,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                 // 2. Fetch latest status
                 const userResponse = await get<any>(`/api/v1/users/${otherUserId}`);
                 if (isMounted.current && userResponse?.success && userResponse?.user) {
+                    setOtherUser(userResponse.user);
                     setUserStatus({
                         isOnline: userResponse.user.isOnline,
                         lastSeen: userResponse.user.lastSeen
@@ -1621,18 +1623,26 @@ const ChatScreen = ({ route, navigation }: any) => {
                     </View>
                 </TouchableOpacity>
                 <View style={styles.headerActions}>
-                    <TouchableOpacity
-                        style={styles.iconButton}
-                        onPress={() => initiateCall(otherUserId, 'audio', otherUser?.name, otherUser?.profileImage)}
-                    >
-                        <Icon name="call-outline" size={24} color="#6366F1" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={styles.iconButton}
-                        onPress={() => initiateCall(otherUserId, 'video', otherUser?.name, otherUser?.profileImage)}
-                    >
-                        <Icon name="videocam-outline" size={24} color="#6366F1" />
-                    </TouchableOpacity>
+                    {!isBlocked && !otherUser?.amIBlocked && (
+                        <>
+                            {canCall !== false && (
+                                <TouchableOpacity
+                                    style={styles.iconButton}
+                                    onPress={() => initiateCall(otherUserId, 'audio', otherUser?.name, otherUser?.profileImage)}
+                                >
+                                    <Icon name="call-outline" size={24} color="#6366F1" />
+                                </TouchableOpacity>
+                            )}
+                            {canCall !== false && (
+                                <TouchableOpacity
+                                    style={styles.iconButton}
+                                    onPress={() => initiateCall(otherUserId, 'video', otherUser?.name, otherUser?.profileImage)}
+                                >
+                                    <Icon name="videocam-outline" size={24} color="#6366F1" />
+                                </TouchableOpacity>
+                            )}
+                        </>
+                    )}
                 </View>
             </View>
 
@@ -1819,7 +1829,23 @@ const ChatScreen = ({ route, navigation }: any) => {
                             </View>
                         )}
 
-                        <View style={styles.inputRow}>
+                        {isBlocked || otherUser?.amIBlocked ? (
+                            <View style={styles.blockedBar}>
+                                 <Text style={styles.blockedText}>
+                                     {otherUser?.amIBlocked 
+                                         ? "You cannot message this user." 
+                                         : "You have blocked this user. Unblock them to message."}
+                                 </Text>
+                                 {!otherUser?.amIBlocked && (
+                                     <TouchableOpacity 
+                                         onPress={() => navigation.navigate('ChatDetail', { user: otherUser, conversationId })}
+                                     >
+                                         <Text style={styles.unblockLink}>Unblock</Text>
+                                     </TouchableOpacity>
+                                 )}
+                             </View>
+                         ) : (
+                             <View style={styles.inputRow}>
                             {/* Attachment Toggle */}
                             <TouchableOpacity
                                 style={[
@@ -1903,9 +1929,10 @@ const ChatScreen = ({ route, navigation }: any) => {
                                 )
                             )}
                         </View>
-                    </View>
+                    )}
                 </View>
-            </KeyboardAvoidingView>
+            </View>
+        </KeyboardAvoidingView>
 
             {/* ── Video Player Modal ── */}
             <Modal
@@ -2932,6 +2959,31 @@ const styles = StyleSheet.create({
         fontSize: 10,
         color: '#9CA3AF',
         marginTop: 4,
+    },
+    blockedBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        paddingHorizontal: 20,
+        backgroundColor: '#FEF2F2',
+        borderTopWidth: 1,
+        borderTopColor: '#FEE2E2',
+        flexWrap: 'wrap',
+        paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+    },
+    blockedText: {
+        fontSize: 14,
+        color: '#EF4444',
+        fontWeight: '600',
+        textAlign: 'center',
+    },
+    unblockLink: {
+        fontSize: 14,
+        color: '#6366F1',
+        fontWeight: '700',
+        marginLeft: 8,
+        textDecorationLine: 'underline',
     },
 });
 

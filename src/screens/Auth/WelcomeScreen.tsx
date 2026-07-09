@@ -111,7 +111,12 @@ const WelcomeScreen = () => {
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>
                         By continuing, you agree to our{' '}
-                        <Text style={styles.footerLink}>Terms of Service</Text>
+                        <Text 
+                            style={styles.footerLink}
+                            onPress={() => navigation.navigate('PrivacyPolicy')}
+                        >
+                            Terms of Service
+                        </Text>
                     </Text>
                 </View>
 

@@ -27,18 +27,18 @@ const HomeScreen = ({ navigation }: any) => {
     const { isConnected } = useSocket();
 
     React.useEffect(() => {
-        const sub = DeviceEventEmitter.addListener('NAVIGATE_TO_CHAT', async ({ userId }) => {
-            console.log('🚀 [Home] Received direct navigation request for user:', userId);
+        const sub = DeviceEventEmitter.addListener('NAVIGATE_TO_CHAT', async ({ userId, canCall }) => {
+            console.log('🚀 [Home] Received direct navigation request for user:', userId, 'canCall:', canCall);
             try {
                 // Fetch full user profile to ensure ChatScreen has what it needs
                 const response = await get<any>(`/api/v1/users/${userId}`);
                 const targetUser = response?.user || { _id: userId, name: 'User' };
                 
-                navigation.navigate('ChatScreen', { user: targetUser });
+                navigation.navigate('ChatScreen', { user: targetUser, canCall });
             } catch (err) {
                 console.error('❌ [Home] Failed to fetch target user for nav:', err);
                 // Fallback navigation
-                navigation.navigate('ChatScreen', { user: { _id: userId, name: 'User' } });
+                navigation.navigate('ChatScreen', { user: { _id: userId, name: 'User' }, canCall });
             }
         });
 
@@ -48,11 +48,14 @@ const HomeScreen = ({ navigation }: any) => {
                 const pending = await AsyncStorage.getItem('@pending_nav_target');
                 if (pending && pending.includes('chat:')) {
                     const userId = pending.split(':')[1];
-                    console.log('🎯 [Home] Found pending target in storage:', userId);
-                    // Don't remove it yet, let the listener handle it or handle it here
-                    // If we handle it here, we should remove it
+                    const canCallStr = await AsyncStorage.getItem('@pending_nav_can_call');
+                    const canCall = canCallStr === 'true' ? true : (canCallStr === 'false' ? false : undefined);
+                    
+                    console.log('🎯 [Home] Found pending target in storage:', userId, 'canCall:', canCall);
+                    
                     await AsyncStorage.removeItem('@pending_nav_target');
-                    DeviceEventEmitter.emit('NAVIGATE_TO_CHAT', { userId });
+                    await AsyncStorage.removeItem('@pending_nav_can_call');
+                    DeviceEventEmitter.emit('NAVIGATE_TO_CHAT', { userId, canCall });
                 }
             } catch (e) {
                 console.log('Error checking pending nav:', e);

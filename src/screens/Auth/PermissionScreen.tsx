@@ -210,9 +210,9 @@ const PermissionScreen = ({ navigation }: any) => {
           <View style={styles.iconContainer}>
             <Icon name="shield-checkmark" size={60} color={Colors.primary} />
           </View>
-          <Text style={styles.title}>Permissions Required</Text>
+          <Text style={styles.title}>Enable Features</Text>
           <Text style={styles.subtitle}>
-            To provide a seamless calling and messaging experience, FlyConnect needs the following permissions.
+            Please enable the following features to enjoy FlyConnect's full experience.
           </Text>
         </View>
 
@@ -262,7 +262,7 @@ const PermissionScreen = ({ navigation }: any) => {
       <View style={styles.footer}>
         {!allMandatoryGranted ? (
           <TouchableOpacity style={styles.grantAllButton} onPress={handleGrantAll}>
-            <Text style={styles.grantAllText}>Grant All Permissions</Text>
+            <Text style={styles.grantAllText}>Enable All Access</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity style={styles.continueButton} onPress={handleContinue}>

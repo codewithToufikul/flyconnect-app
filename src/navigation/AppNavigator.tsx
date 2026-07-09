@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StyleSheet, View, Platform, ActivityIndicator, DeviceEventEmitter, Linking, Alert } from 'react-native';
+import { StyleSheet, View, Platform, ActivityIndicator, DeviceEventEmitter, Linking } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { BlurView } from '@react-native-community/blur';
 
@@ -18,6 +18,8 @@ import ChatDetailScreen from '../screens/Main/ChatDetailScreen';
 import IncomingCallScreen from '../screens/Calls/IncomingCallScreen';
 import ActiveCallScreen from '../screens/Calls/ActiveCallScreen';
 import PermissionScreen from '../screens/Auth/PermissionScreen';
+import PrivacyPolicyScreen from '../screens/Auth/PrivacyPolicyScreen';
+import ReportScreen from '../screens/Main/ReportScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { check, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { useInbox } from '../context/InboxContext';
@@ -153,34 +155,44 @@ const AppNavigator = () => {
                     if (!dataStr) return;
 
                     const decodedData = JSON.parse(decodeURIComponent(dataStr));
-                    const { token: flyBookToken, target } = decodedData;
+                    const { token: flyBookToken, target, canCall } = decodedData;
 
-                    console.log('🎯 [SSO-DeepLink] Parsed target:', target);
+                    console.log('🎯 [SSO-DeepLink] Parsed target:', target, 'canCall:', canCall);
 
+                    // Always save pending target FIRST before any async operations
                     if (target) {
                         await AsyncStorage.setItem('@pending_nav_target', target);
+                        if (canCall !== undefined) {
+                            await AsyncStorage.setItem('@pending_nav_can_call', canCall.toString());
+                        }
                     }
 
-                    // CASE 1: User is already logged in
+                    // CASE 1: User is already logged in — emit nav event directly
                     if (userToken) {
                         console.log('✅ [SSO-DeepLink] Already logged in, triggering navigation...');
                         if (target && target.includes('chat:')) {
                             const userId = target.split(':')[1];
-                            // Direct emit. HomeScreen or current active screen will catch this
-                            DeviceEventEmitter.emit('NAVIGATE_TO_CHAT', { userId });
+                            // Small delay to ensure HomeScreen is mounted
+                            setTimeout(() => {
+                                DeviceEventEmitter.emit('NAVIGATE_TO_CHAT', { userId, canCall });
+                            }, 500);
                         }
-                    } 
-                    // CASE 2: User needs to log in via SSO
+                    }
+                    // CASE 2: User needs to log in via SSO token exchange
                     else if (flyBookToken) {
                         console.log('🔄 [SSO-DeepLink] Need SSO login, exchanging token...');
                         DeviceEventEmitter.emit('SSO_LOADING', true);
                         try {
                             const result = await loginWithFlyBook(flyBookToken);
                             if (result.success) {
+                                // AUTH_UPDATED triggers checkAuth → setUserToken
+                                // HomeScreen will mount and pick up pending target from AsyncStorage
                                 DeviceEventEmitter.emit('AUTH_UPDATED');
                             } else {
-                                Alert.alert('SSO Error', result.message || 'Failed to sync with FlyBook');
+                                console.warn('⚠️ [SSO] SSO returned failure:', result.message);
                             }
+                        } catch (ssoErr: any) {
+                            console.error('❌ [SSO-DeepLink] Token exchange error:', ssoErr?.message || ssoErr);
                         } finally {
                             DeviceEventEmitter.emit('SSO_LOADING', false);
                         }
@@ -192,7 +204,7 @@ const AppNavigator = () => {
         };
 
         const sub = Linking.addEventListener('url', handleIncomingUrl);
-        
+
         // Handle background launch/cold start
         Linking.getInitialURL().then(url => {
             if (url) handleIncomingUrl({ url });
@@ -220,6 +232,7 @@ const AppNavigator = () => {
                 <>
                     <Stack.Screen name="Welcome" component={WelcomeScreen} />
                     <Stack.Screen name="Auth" component={LoginScreen} />
+                    <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
                 </>
             ) : (
                 <>
@@ -243,6 +256,11 @@ const AppNavigator = () => {
                         name="ActiveCall"
                         component={ActiveCallScreen}
                         options={{ headerShown: false, gestureEnabled: false }}
+                    />
+                    <Stack.Screen
+                        name="Report"
+                        component={ReportScreen}
+                        options={{ headerShown: false }}
                     />
                 </>
             )}

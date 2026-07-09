@@ -21,7 +21,6 @@ const RINGTONE_URL = 'https://res.cloudinary.com/duyrnfagi/video/upload/v1773731
 
 const IncomingCallScreen = () => {
   const { callSession, acceptCall, declineCall } = useCall();
-  const [isPlaying, setIsPlaying] = React.useState(true);
 
   useEffect(() => {
     // Only go back if the call session is completely gone or finished
@@ -32,10 +31,18 @@ const IncomingCallScreen = () => {
 
   useEffect(() => {
     console.log('🔔 [IncomingCallScreen] Starting Ringtone Session...');
-    // Force speakerphone and start audio session
-    InCallManager.start({ media: 'audio' });
-    InCallManager.setSpeakerphoneOn(true);
-    InCallManager.setForceSpeakerphoneOn(true);
+    
+    // Play custom or default ringtone natively
+    try {
+      InCallManager.startRingtone('_BUNDLE_', [0, 500, 1000], 'soloAmbient', 30);
+    } catch (err) {
+      console.warn('Failed to start bundle ringtone, trying default:', err);
+      try {
+        InCallManager.startRingtone('_DEFAULT_', [0, 500, 1000], 'soloAmbient', 30);
+      } catch (e) {
+        console.error('Failed to play any ringtone:', e);
+      }
+    }
     
     // Start vibration pattern: [delay, vibrate, delay, vibrate...]
     const VIBRATE_PATTERN = [0, 500, 1000]; 
@@ -44,24 +51,29 @@ const IncomingCallScreen = () => {
     return () => {
       console.log('🔇 [IncomingCallScreen] Cleaning up IncomingCallScreen handlers');
       Vibration.cancel();
-      // NOTE: We do NOT call InCallManager.stop() here because it might 
-      // kill the audio session for the active call we are about to join.
+      try {
+        InCallManager.stopRingtone();
+      } catch (e) {
+        console.error('Failed to stop ringtone:', e);
+      }
     };
   }, []);
 
   const handleAccept = () => {
     console.log('✅ [IncomingCallScreen] Accept pressed');
-    setIsPlaying(false);
     Vibration.cancel();
-    // Do NOT stop InCallManager here, let it transition to active call
+    try {
+      InCallManager.stopRingtone();
+    } catch (e) {}
     acceptCall();
   };
 
   const handleDecline = () => {
     console.log('❌ [IncomingCallScreen] Decline pressed');
-    setIsPlaying(false);
     Vibration.cancel();
-    InCallManager.stop();
+    try {
+      InCallManager.stopRingtone();
+    } catch (e) {}
     declineCall();
   };
 
@@ -114,19 +126,6 @@ const IncomingCallScreen = () => {
             <Text style={styles.buttonText}>Accept</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Hidden Audio Player for Ringtone */}
-        {isPlaying && (
-          <Video
-            source={{ uri: RINGTONE_URL }}
-            repeat={true}
-            paused={!isPlaying}
-            playInBackground={true}
-            playWhenInactive={true}
-            volume={1.0}
-            style={{ width: 0, height: 0 }}
-          />
-        )}
       </LinearGradient>
     </SafeAreaView>
   );

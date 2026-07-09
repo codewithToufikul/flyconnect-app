@@ -61,7 +61,7 @@ const RINGBACK_URL = 'https://www.soundjay.com/phone_c2026/sounds/phone-calling-
 const RINGBACK_ID = 1;
 
 const ActiveCallScreen = () => {
-  const { callSession, endCall, isAudioActivated } = useCall();
+  const { callSession, endCall, isAudioActivated, setIsMinimized } = useCall();
   const { user } = useProfile();
 
   const [token, setToken] = useState<string | null>(null);
@@ -404,6 +404,11 @@ const ActiveCallScreen = () => {
     }, 100);
   }, [endCall]);
 
+  const handleMinimize = useCallback(() => {
+    setIsMinimized(true);
+    goBack();
+  }, [setIsMinimized]);
+
   // Exit if call ends from context
   useEffect(() => {
     if (!callSession) {
@@ -432,6 +437,15 @@ const ActiveCallScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
+
+      {/* Minimize button — top-left overlay */}
+      <TouchableOpacity
+        style={styles.minimizeButton}
+        onPress={handleMinimize}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+      >
+        <Icon name="chevron-down" size={26} color="rgba(255,255,255,0.85)" />
+      </TouchableOpacity>
 
       {/* 1. Main View (Remote Video or Avatar) */}
       <View style={styles.videoGrid}>
@@ -523,6 +537,18 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#1a1c2c',
+  },
+  minimizeButton: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? 12 : 0,
+    left: 16,
+    zIndex: 100,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   loadingContainer: {
     flex: 1,

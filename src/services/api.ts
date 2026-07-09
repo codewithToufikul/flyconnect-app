@@ -14,9 +14,9 @@ const PRODUCTION_URL = 'https://connect.flybook.com.bd';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://192.168.1.195:10000',
-  ios: 'http://192.168.1.195:10000',
-  default: 'http://192.168.1.195:10000',
+  android: 'http://localhost:10000',
+  ios: 'http://localhost:10000',
+  default: 'http://localhost:10000',
 });
 
 // Automatically use Local during development and Production in released app
@@ -129,6 +129,18 @@ export const declineCallAPI = async (data: {
   callerId: string;
 }) => {
   return post('/api/v1/calls/decline', data);
+};
+
+export const blockUserAPI = async (userId: string) => {
+  return post(`/api/v1/users/block/${userId}`);
+};
+
+export const unblockUserAPI = async (userId: string) => {
+  return post(`/api/v1/users/unblock/${userId}`);
+};
+
+export const getBlockedUsersAPI = async () => {
+  return get('/api/v1/users/me/blocks');
 };
 
 export const get = async <T = any>(url: string, config?: any): Promise<T> => {
