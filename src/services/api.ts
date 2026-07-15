@@ -4,7 +4,7 @@ import axios, {
   InternalAxiosRequestConfig,
 } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Platform} from 'react-native';
+import { Platform } from 'react-native';
 
 // ============================================
 // BASE URL CONFIGURATION1
@@ -14,7 +14,7 @@ const PRODUCTION_URL = 'https://connect.flybook.com.bd';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://localhost:10000',
+  android: 'http://10.0.2.2:10000',
   ios: 'http://localhost:10000',
   default: 'http://localhost:10000',
 });
@@ -70,7 +70,7 @@ apiClient.interceptors.response.use(
       });
     }
 
-    const {status, data} = error.response;
+    const { status, data } = error.response;
 
     if (status === 401) {
       await clearAuth();
@@ -109,7 +109,7 @@ export const searchUsers = async (query: string) => {
 };
 
 export const getOrCreateConversation = async (receiverId: string) => {
-  return post('/api/v1/chats/get-or-create', {receiverId});
+  return post('/api/v1/chats/get-or-create', { receiverId });
 };
 
 export const getChatMessages = async (conversationId: string, page = 1) => {

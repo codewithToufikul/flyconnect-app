@@ -11,6 +11,7 @@ import {
     Alert,
     DeviceEventEmitter,
     Linking,
+    Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
@@ -39,16 +40,32 @@ const WelcomeScreen = () => {
     const handleFlyBookSignInPress = async () => {
         const url = 'flybook://sso-auth?callback=flyconnect';
         console.log('🚀 [SSO] Requesting FlyBook SSO...');
-        const supported = await Linking.canOpenURL(url);
-
-        if (supported) {
-            await Linking.openURL(url);
-        } else {
-            Alert.alert(
-                'FlyBook Not Found',
-                'Please install the FlyBook app to use this feature.',
-                [{ text: 'OK' }]
-            );
+        try {
+            const supported = await Linking.canOpenURL('flybook://');
+            if (supported) {
+                await Linking.openURL(url);
+            } else {
+                console.log('ℹ️ [SSO] FlyBook app not found. Redirecting to app store...');
+                if (Platform.OS === 'android') {
+                    const playStoreUrl = 'market://details?id=com.flybook';
+                    const webPlayStoreUrl = 'https://play.google.com/store/apps/details?id=com.flybook';
+                    try {
+                        await Linking.openURL(playStoreUrl);
+                    } catch {
+                        await Linking.openURL(webPlayStoreUrl);
+                    }
+                } else {
+                    const appStoreUrl = 'itms-apps://itunes.apple.com/app/id6761653161';
+                    const webAppStoreUrl = 'https://apps.apple.com/us/app/flybook-connect-people-nearby/id6761653161';
+                    try {
+                        await Linking.openURL(appStoreUrl);
+                    } catch {
+                        await Linking.openURL(webAppStoreUrl);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('SSO Open URL error:', error);
         }
     };
 
