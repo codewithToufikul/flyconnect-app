@@ -81,3 +81,8 @@ ios/GoogleService-Info.plist
 ios/FlyConnect/GoogleService-Info.plist
 *.keystore
 !debug.keystore
+*.p8
+*firebase-admin*.json
+config/
+
+

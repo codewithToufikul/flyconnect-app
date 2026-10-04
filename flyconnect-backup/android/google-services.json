@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "122087030972",
+    "project_id": "flyconnect-1efb7",
+    "storage_bucket": "flyconnect-1efb7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:122087030972:android:e9f1e2481ace16c7b0d0b9",
+        "android_client_info": {
+          "package_name": "com.flyconnect"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQaBkS_ifH_-9OC5XPvSil3EaX3mkFi5g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

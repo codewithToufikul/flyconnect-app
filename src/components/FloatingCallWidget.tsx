@@ -11,31 +11,39 @@ import {
   Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { RtcSurfaceView } from 'react-native-agora';
+import LinearGradient from 'react-native-linear-gradient';
 import { useCall } from '../context/CallContext';
+import { useProfile } from '../context/ProfileContext';
 import { navigate } from '../navigation/RootNavigation';
+import AgoraService from '../services/AgoraService';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-// Widget dimensions
-const WIDGET_W = 200;
-const WIDGET_H = 64;
+// Dimensions
+const AUDIO_W = 200;
+const AUDIO_H = 64;
 
-// Default position: top-right corner with margin
-const INITIAL_X = SCREEN_W - WIDGET_W - 16;
+const VIDEO_W = 115;
+const VIDEO_H = 165;
+
+const INITIAL_X = SCREEN_W - VIDEO_W - 16;
 const INITIAL_Y = Platform.OS === 'android' ? 60 : 90;
 
 const FloatingCallWidget = () => {
   const { callSession, endCall, isMinimized, setIsMinimized } = useCall();
+  const { user } = useProfile();
 
-  // Duration timer
-  const [seconds, setSeconds] = useState(0);
+  // Continuous accurate duration timer
+  const [seconds, setSeconds] = useState(AgoraService.getElapsedDuration());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (isMinimized && callSession?.status === 'ACTIVE') {
-      setSeconds(0);
+    const isConnected = callSession?.status === 'ACTIVE' || AgoraService.getConnectedAt() !== null;
+    if (isMinimized && isConnected) {
+      setSeconds(AgoraService.getElapsedDuration());
       timerRef.current = setInterval(() => {
-        setSeconds(s => s + 1);
+        setSeconds(AgoraService.getElapsedDuration());
       }, 1000);
     } else {
       if (timerRef.current) {
@@ -49,10 +57,15 @@ const FloatingCallWidget = () => {
   }, [isMinimized, callSession?.status]);
 
   const formatDuration = (s: number) => {
-    const m = Math.floor(s / 60);
+    const hrs = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
-    return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+    return `${hrs > 0 ? hrs + ':' : ''}${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   };
+
+  const isVideo = callSession?.type === 'video';
+  const currentWidgetW = isVideo ? VIDEO_W : AUDIO_W;
+  const currentWidgetH = isVideo ? VIDEO_H : AUDIO_H;
 
   // Drag position
   const pan = useRef(new Animated.ValueXY({ x: INITIAL_X, y: INITIAL_Y })).current;
@@ -73,17 +86,17 @@ const FloatingCallWidget = () => {
       onPanResponderRelease: (_, gs) => {
         pan.flattenOffset();
         // Clamp within screen bounds
-        const clampX = Math.max(0, Math.min(SCREEN_W - WIDGET_W, panOffset.current.x + gs.dx));
+        const clampX = Math.max(8, Math.min(SCREEN_W - currentWidgetW - 8, panOffset.current.x + gs.dx));
         const clampY = Math.max(
           Platform.OS === 'android' ? 24 : 44,
-          Math.min(SCREEN_H - WIDGET_H - 32, panOffset.current.y + gs.dy),
+          Math.min(SCREEN_H - currentWidgetH - 32, panOffset.current.y + gs.dy),
         );
         panOffset.current = { x: clampX, y: clampY };
         Animated.spring(pan, {
           toValue: { x: clampX, y: clampY },
           useNativeDriver: false,
-          tension: 80,
-          friction: 10,
+          tension: 85,
+          friction: 11,
         }).start();
       },
     }),
@@ -91,12 +104,11 @@ const FloatingCallWidget = () => {
 
   if (!isMinimized || !callSession) return null;
 
-  const isVideo = callSession.type === 'video';
-  const otherPerson =
-    callSession.caller.id !== callSession.receiver.id
-      ? callSession.caller
-      : callSession.receiver;
+  const currentUserId = (user as any)?._id || (user as any)?.id || '';
+  const isCaller = callSession.caller.id === currentUserId;
+  const otherPerson = isCaller ? callSession.receiver : callSession.caller;
   const avatar = otherPerson?.profileImage;
+  const remoteUid = AgoraService.getRemoteUid();
 
   const handleRestore = () => {
     setIsMinimized(false);
@@ -107,25 +119,87 @@ const FloatingCallWidget = () => {
     endCall();
   };
 
+  // ── Render Messenger-Style Video Mini Screen (PIP) ─────────────────────────
+  if (isVideo) {
+    return (
+      <Animated.View
+        style={[
+          styles.videoContainer,
+          { transform: pan.getTranslateTransform() },
+        ]}
+        {...panResponder.panHandlers}>
+        <TouchableOpacity
+          activeOpacity={0.94}
+          onPress={handleRestore}
+          style={styles.videoInner}>
+          {/* Video stream or avatar fallback */}
+          {remoteUid ? (
+            <RtcSurfaceView
+              canvas={{ uid: remoteUid }}
+              style={styles.pipVideo}
+              zOrderMediaOverlay={true}
+            />
+          ) : (
+            <View style={styles.videoAvatarFallback}>
+              {avatar ? (
+                <Image source={{ uri: avatar }} style={styles.videoFallbackAvatar} />
+              ) : (
+                <Icon name="video" size={32} color="#818CF8" />
+              )}
+            </View>
+          )}
+
+          {/* Top subtle gradient overlay */}
+          <LinearGradient
+            colors={['rgba(0,0,0,0.65)', 'transparent']}
+            style={styles.pipTopGradient}>
+            <View style={styles.pipLiveBadge}>
+              <View style={styles.pipLiveDot} />
+              <Text style={styles.pipDurationText}>{formatDuration(seconds)}</Text>
+            </View>
+          </LinearGradient>
+
+          {/* Bottom subtle control overlay */}
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.8)']}
+            style={styles.pipBottomGradient}>
+            {/* Maximize hint icon */}
+            <View style={styles.pipExpandBtn}>
+              <Icon name="arrow-expand" size={14} color="#fff" />
+            </View>
+
+            {/* End call button */}
+            <TouchableOpacity
+              style={styles.pipEndBtn}
+              onPress={handleEndCall}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Icon name="phone-hangup" size={13} color="#fff" />
+            </TouchableOpacity>
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  }
+
+  // ── Render Audio Call Capsule Bar ──────────────────────────────────────────
   return (
     <Animated.View
-      style={[styles.container, { transform: pan.getTranslateTransform() }]}
+      style={[
+        styles.audioContainer,
+        { transform: pan.getTranslateTransform() },
+      ]}
       {...panResponder.panHandlers}>
       <TouchableOpacity
         activeOpacity={0.92}
         onPress={handleRestore}
-        style={styles.inner}>
-        {/* Avatar / call icon */}
+        style={styles.audioInner}>
+        {/* Avatar */}
         <View style={styles.avatarWrap}>
           {avatar ? (
             <Image source={{ uri: avatar }} style={styles.avatar} />
           ) : (
             <View style={styles.avatarFallback}>
-              <Icon
-                name={isVideo ? 'video' : 'phone'}
-                size={20}
-                color="#fff"
-              />
+              <Icon name="phone" size={20} color="#fff" />
             </View>
           )}
           {/* Pulsing active dot */}
@@ -153,19 +227,119 @@ const FloatingCallWidget = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
+  // Video Mini PIP styles
+  videoContainer: {
     position: 'absolute',
-    width: WIDGET_W,
-    height: WIDGET_H,
+    width: VIDEO_W,
+    height: VIDEO_H,
     zIndex: 9999,
-    elevation: 20, // Android
-    // Shadow for iOS
+    elevation: 25,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+  },
+  videoInner: {
+    flex: 1,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#0F172A',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.3)',
+    position: 'relative',
+  },
+  pipVideo: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  videoAvatarFallback: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1E293B',
+  },
+  videoFallbackAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: '#6366F1',
+  },
+  pipTopGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 40,
+    paddingTop: 6,
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  pipLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  pipLiveDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#10B981',
+    marginRight: 4,
+  },
+  pipDurationText: {
+    color: '#E0E7FF',
+    fontSize: 10,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  pipBottomGradient: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 46,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    paddingBottom: 6,
+    paddingHorizontal: 8,
+  },
+  pipExpandBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pipEndBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Audio Capsule styles
+  audioContainer: {
+    position: 'absolute',
+    width: AUDIO_W,
+    height: AUDIO_H,
+    zIndex: 9999,
+    elevation: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 8,
   },
-  inner: {
+  audioInner: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -237,3 +411,4 @@ const styles = StyleSheet.create({
 });
 
 export default FloatingCallWidget;
+

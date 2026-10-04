@@ -94,6 +94,8 @@ const linking = {
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { ThemeProvider } from './src/context/ThemeContext';
+
 const App = () => {
 
   useEffect(() => {
@@ -164,27 +166,29 @@ const App = () => {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ProfileProvider>
-        <ToastProvider>
-          <SocketProvider>
-            <CallProvider>
-              <InboxProvider>
-                <NavigationContainer ref={navigationRef} linking={linking}>
-                  <StatusBar
-                    barStyle="dark-content"
-                    translucent
-                    backgroundColor="transparent"
-                  />
-                  <AppNavigator />
-                  <InAppToast />
-                </NavigationContainer>
-                {/* Floating minimized call widget — overlays everything */}
-                <FloatingCallWidget />
-              </InboxProvider>
-            </CallProvider>
-          </SocketProvider>
-        </ToastProvider>
-      </ProfileProvider>
+      <ThemeProvider>
+        <ProfileProvider>
+          <ToastProvider>
+            <SocketProvider>
+              <CallProvider>
+                <InboxProvider>
+                  <NavigationContainer ref={navigationRef} linking={linking}>
+                    <StatusBar
+                      barStyle="dark-content"
+                      translucent
+                      backgroundColor="transparent"
+                    />
+                    <AppNavigator />
+                    <InAppToast />
+                  </NavigationContainer>
+                  {/* Floating minimized call widget — overlays everything */}
+                  <FloatingCallWidget />
+                </InboxProvider>
+              </CallProvider>
+            </SocketProvider>
+          </ToastProvider>
+        </ProfileProvider>
+      </ThemeProvider>
     </GestureHandlerRootView>
   );
 };

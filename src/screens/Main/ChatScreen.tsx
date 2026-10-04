@@ -24,9 +24,10 @@ import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import Video from 'react-native-video';
 import ImageView from 'react-native-image-viewing';
 import RNBlobUtil from 'react-native-blob-util';
-import { getOrCreateConversation, getChatMessages, get } from '../../services/api';
+import { getOrCreateConversation, getChatMessages, get, clearChatAPI, blockUserAPI, unblockUserAPI, deleteMessageAPI } from '../../services/api';
 import { useSocket } from '../../context/SocketContext';
 import { useProfile } from '../../context/ProfileContext';
+import { useToast } from '../../context/ToastContext';
 import StorageService from '../../services/StorageService';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MediaService, { PickedMedia } from '../../services/MediaService';
@@ -117,11 +118,13 @@ const ChatScreen = ({ route, navigation }: any) => {
     const [otherUser, setOtherUser] = useState<any>(initialUser);
     const [loadingUser, setLoadingUser] = useState(!initialUser && !!deepLinkedUserId);
 
-    const { user: currentUser } = useProfile();
+    const { user: currentUser, refreshProfile } = useProfile();
     const { initiateCall } = useCall();
-    const { clearUnreadLocally } = useInbox();
+    const { clearUnreadLocally, clearChatLocally } = useInbox();
+    const { showToast } = useToast();
     const { socket } = useSocket();
 
+    const [headerMenuVisible, setHeaderMenuVisible] = useState(false);
     const [messages, setMessages] = useState<any[]>([]);
     const [conversationId, setConversationId] = useState<string | null>(null);
     const [inputText, setInputText] = useState('');
@@ -515,13 +518,31 @@ const ChatScreen = ({ route, navigation }: any) => {
         setActionSheetVisible(false);
     };
 
-    const confirmDeleteMessage = () => {
-        if (!selectedMessage) return;
-
-        // 1. Emit delete event
-        const msgId = (selectedMessage as any)?._id;
+    const handleDeleteForMe = async (msgToDel?: any) => {
+        const msg = msgToDel || selectedMessage;
+        if (!msg) return;
+        const msgId = msg._id || msg.id;
         if (!msgId) return;
 
+        setMessages(prev => prev.filter((m: any) => (m._id || m.id) !== msgId));
+        setActionSheetVisible(false);
+        setSelectedMessage(null);
+
+        try {
+            await deleteMessageAPI(msgId, false);
+            showToast({ senderName: 'Message Deleted', message: 'Message removed from your view.' });
+        } catch (err) {
+            console.warn('Delete for me error:', err);
+        }
+    };
+
+    const confirmDeleteMessage = async () => {
+        if (!selectedMessage) return;
+
+        const msgId = (selectedMessage as any)?._id || (selectedMessage as any)?.id;
+        if (!msgId) return;
+
+        // 1. Emit delete event
         socket.emit('delete_message', {
             messageId: msgId,
             conversationId,
@@ -530,7 +551,7 @@ const ChatScreen = ({ route, navigation }: any) => {
 
         // 2. Update local state
         setMessages(prev => prev.map(msg =>
-            (msg as any)._id === msgId
+            ((msg as any)._id === msgId || (msg as any).id === msgId)
                 ? { ...msg, content: 'This message was deleted', isDeleted: true, mediaUrl: null, thumbnailUrl: null }
                 : msg
         ));
@@ -538,6 +559,75 @@ const ChatScreen = ({ route, navigation }: any) => {
         setConfirmDeleteVisible(false);
         setActionSheetVisible(false);
         setSelectedMessage(null);
+
+        try {
+            await deleteMessageAPI(msgId, true);
+            showToast({ senderName: 'Message Deleted', message: 'Message deleted for everyone.' });
+        } catch (err) {
+            console.warn('Delete for everyone error:', err);
+        }
+    };
+
+    const handleClearChat = () => {
+        setHeaderMenuVisible(false);
+        Alert.alert(
+            'Clear Chat',
+            'Are you sure you want to clear all messages in this conversation?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Clear',
+                    style: 'destructive',
+                    onPress: async () => {
+                        if (conversationId) {
+                            setMessages([]);
+                            clearChatLocally(conversationId);
+                            try {
+                                await clearChatAPI(conversationId);
+                                StorageService.saveMessages(conversationId, []);
+                                showToast({ senderName: 'Chat Cleared', message: 'All messages have been cleared.' });
+                            } catch (err) {
+                                console.error('Clear chat error:', err);
+                            }
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const handleToggleBlock = () => {
+        setHeaderMenuVisible(false);
+        const isCurrentlyBlocked = currentUser?.blockedUsers?.some(
+            (id: any) => id?.toString() === otherUserId?.toString()
+        );
+        Alert.alert(
+            isCurrentlyBlocked ? 'Unblock User' : 'Block User',
+            isCurrentlyBlocked
+                ? `Are you sure you want to unblock ${otherUser?.name}?`
+                : `Are you sure you want to block ${otherUser?.name}? They will not be able to message or call you.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: isCurrentlyBlocked ? 'Unblock' : 'Block',
+                    style: isCurrentlyBlocked ? 'default' : 'destructive',
+                    onPress: async () => {
+                        try {
+                            if (isCurrentlyBlocked) {
+                                await unblockUserAPI(otherUserId);
+                                showToast({ senderName: 'User Unblocked', message: `${otherUser?.name} has been unblocked.` });
+                            } else {
+                                await blockUserAPI(otherUserId);
+                                showToast({ senderName: 'User Blocked', message: `${otherUser?.name} has been blocked.` });
+                            }
+                            await refreshProfile();
+                        } catch (err) {
+                            console.error('Block toggle error:', err);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const handleEditAction = () => {
@@ -1643,6 +1733,12 @@ const ChatScreen = ({ route, navigation }: any) => {
                             )}
                         </>
                     )}
+                    <TouchableOpacity
+                        style={styles.iconButton}
+                        onPress={() => setHeaderMenuVisible(true)}
+                    >
+                        <Icon name="ellipsis-vertical" size={22} color="#4B5563" />
+                    </TouchableOpacity>
                 </View>
             </View>
 
@@ -2121,6 +2217,15 @@ const ChatScreen = ({ route, navigation }: any) => {
                             )}
 
                             <TouchableOpacity
+                                style={styles.actionItem}
+                                onPress={() => handleDeleteForMe(selectedMessage)}>
+                                <View style={[styles.actionIconBg, { backgroundColor: '#FEF2F2' }]}>
+                                    <Icon name="trash-bin-outline" size={22} color="#EF4444" />
+                                </View>
+                                <Text style={[styles.actionText, { color: '#EF4444' }]}>Delete for Me</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
                                 style={[styles.actionItem, { marginTop: 8 }]}
                                 onPress={() => setActionSheetVisible(false)}>
                                 <View style={[styles.actionIconBg, { backgroundColor: '#F3F4F6' }]}>
@@ -2129,6 +2234,75 @@ const ChatScreen = ({ route, navigation }: any) => {
                                 <Text style={styles.actionText}>Cancel</Text>
                             </TouchableOpacity>
                         </View>
+                    </View>
+                </TouchableWithoutFeedback>
+            </Modal>
+
+            {/* ── Header Options Menu Modal ── */}
+            <Modal
+                visible={headerMenuVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setHeaderMenuVisible(false)}>
+                <TouchableWithoutFeedback onPress={() => setHeaderMenuVisible(false)}>
+                    <View style={styles.actionSheetOverlay}>
+                        <TouchableWithoutFeedback>
+                            <View style={styles.actionSheetContent}>
+                                <View style={styles.actionSheetHandle} />
+                                <Text style={{ fontSize: 17, fontWeight: '700', color: '#111827', marginBottom: 6, textAlign: 'center' }}>
+                                    {otherUser?.name}
+                                </Text>
+                                <View style={styles.actionSheetDivider} />
+
+                                <TouchableOpacity
+                                    style={styles.actionItem}
+                                    onPress={() => {
+                                        setHeaderMenuVisible(false);
+                                        navigation.navigate('ChatDetail', {
+                                            user: {
+                                                ...otherUser,
+                                                isOnline: userStatus.isOnline,
+                                                lastSeen: userStatus.lastSeen
+                                            },
+                                            conversationId
+                                        });
+                                    }}>
+                                    <View style={[styles.actionIconBg, { backgroundColor: '#EEF2FF' }]}>
+                                        <Icon name="person-outline" size={22} color="#6366F1" />
+                                    </View>
+                                    <Text style={styles.actionText}>View Profile</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.actionItem}
+                                    onPress={handleClearChat}>
+                                    <View style={[styles.actionIconBg, { backgroundColor: '#FEF2F2' }]}>
+                                        <Icon name="brush-outline" size={22} color="#EF4444" />
+                                    </View>
+                                    <Text style={styles.actionText}>Clear All Messages</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.actionItem}
+                                    onPress={handleToggleBlock}>
+                                    <View style={[styles.actionIconBg, { backgroundColor: '#FEF2F2' }]}>
+                                        <Icon name={isBlocked ? "lock-open-outline" : "ban-outline"} size={22} color="#EF4444" />
+                                    </View>
+                                    <Text style={[styles.actionText, { color: isBlocked ? '#10B981' : '#EF4444' }]}>
+                                        {isBlocked ? "Unblock User" : "Block User"}
+                                    </Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.actionItem, { marginTop: 8 }]}
+                                    onPress={() => setHeaderMenuVisible(false)}>
+                                    <View style={[styles.actionIconBg, { backgroundColor: '#F3F4F6' }]}>
+                                        <Icon name="close" size={22} color="#4B5563" />
+                                    </View>
+                                    <Text style={styles.actionText}>Cancel</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </TouchableWithoutFeedback>
                     </View>
                 </TouchableWithoutFeedback>
             </Modal>

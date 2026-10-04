@@ -12,12 +12,9 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Video from 'react-native-video';
 import InCallManager from 'react-native-incall-manager';
 import { useCall } from '../../context/CallContext';
 import { goBack } from '../../navigation/RootNavigation';
-
-const RINGTONE_URL = 'https://res.cloudinary.com/duyrnfagi/video/upload/v1773731369/mixkit-marimba-waiting-ringtone-1360_wi6le1.wav';
 
 const IncomingCallScreen = () => {
   const { callSession, acceptCall, declineCall } = useCall();
@@ -32,24 +29,19 @@ const IncomingCallScreen = () => {
   useEffect(() => {
     console.log('🔔 [IncomingCallScreen] Starting Ringtone Session...');
     
-    // Play custom or default ringtone natively
+    // Play ringtone natively
     try {
-      InCallManager.startRingtone('_BUNDLE_', [0, 500, 1000], 'soloAmbient', 30);
+      InCallManager.startRingtone('_DEFAULT_', [0, 600, 1000], 'soloAmbient', 30);
     } catch (err) {
-      console.warn('Failed to start bundle ringtone, trying default:', err);
-      try {
-        InCallManager.startRingtone('_DEFAULT_', [0, 500, 1000], 'soloAmbient', 30);
-      } catch (e) {
-        console.error('Failed to play any ringtone:', e);
-      }
+      console.warn('⚠️ [IncomingCallScreen] Failed to start default ringtone:', err);
     }
     
     // Start vibration pattern: [delay, vibrate, delay, vibrate...]
-    const VIBRATE_PATTERN = [0, 500, 1000]; 
+    const VIBRATE_PATTERN = [0, 800, 1000]; 
     Vibration.vibrate(VIBRATE_PATTERN, true);
     
     return () => {
-      console.log('🔇 [IncomingCallScreen] Cleaning up IncomingCallScreen handlers');
+      console.log('🔇 [IncomingCallScreen] Cleaning up ringtone & vibration');
       Vibration.cancel();
       try {
         InCallManager.stopRingtone();

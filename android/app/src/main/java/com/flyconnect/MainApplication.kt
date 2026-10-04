@@ -25,6 +25,7 @@ class MainApplication : Application(), ReactApplication {
               } catch (e: Exception) {
                   // If already registered by autolinking, ignore
               }
+              add(PipPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

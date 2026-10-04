@@ -10,16 +10,16 @@ import {
   Dimensions,
   Image,
   Platform,
+  BackHandler,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import {
-  createAgoraRtcEngine,
   ChannelProfileType,
   ClientRoleType,
   IRtcEngine,
   RtcSurfaceView,
   RtcConnection,
-  RemoteVideoState,
-  RemoteVideoStateReason,
   AudioProfileType,
   AudioScenarioType,
   VideoSourceType,
@@ -34,19 +34,28 @@ import {
 } from 'react-native-agora';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
-import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
+import { request, PERMISSIONS } from 'react-native-permissions';
 import InCallManager from 'react-native-incall-manager';
 import { useCall } from '../../context/CallContext';
 import { useProfile } from '../../context/ProfileContext';
 import { goBack } from '../../navigation/RootNavigation';
 import api from '../../services/api';
+import AgoraService from '../../services/AgoraService';
+import PipService from '../../services/PipService';
 
 const { width, height } = Dimensions.get('window');
 
+const PIP_W = 120;
+const PIP_H = 180;
+const INITIAL_PIP_X = width - PIP_W - 16;
+const INITIAL_PIP_Y = Platform.OS === 'android' ? 36 : 56;
+
 const getNumericUid = (id: string): number => {
-  if (!id) return 0;
-  // If it's already a numeric string, just parse it
-  if (/^\d+$/.test(id)) return parseInt(id, 10);
+  if (!id) return 1;
+  if (/^\d+$/.test(id)) {
+    const parsed = parseInt(id, 10);
+    return parsed > 0 ? parsed : 1;
+  }
 
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
@@ -54,10 +63,11 @@ const getNumericUid = (id: string): number => {
     hash = (hash << 5) - hash + char;
     hash |= 0;
   }
-  return Math.abs(hash);
+  const positive = Math.abs(hash);
+  return positive > 0 ? positive : 1;
 };
 
-const RINGBACK_URL = 'https://www.soundjay.com/phone_c2026/sounds/phone-calling-1b.mp3'; // Professional ringback tone URL
+const RINGBACK_URL = 'https://www.soundjay.com/phone_c2026/sounds/phone-calling-1b.mp3';
 const RINGBACK_ID = 1;
 
 const ActiveCallScreen = () => {
@@ -69,39 +79,75 @@ const ActiveCallScreen = () => {
   const [loading, setLoading] = useState(true);
 
   // Agora State
-  const engine = useRef<IRtcEngine | null>(null);
+  const engine = useRef<IRtcEngine | null>(AgoraService.getEngine());
   const hasExited = useRef(false);
   const isRingbackPlaying = useRef(false);
-  const [isJoined, setIsJoined] = useState(false);
-  const [isEngineReady, setIsEngineReady] = useState(false);
-  const [remoteUid, setRemoteUid] = useState<number | null>(null);
+  const [isJoined, setIsJoined] = useState(AgoraService.getIsJoined());
+  const [isEngineReady, setIsEngineReady] = useState(AgoraService.getEngine() !== null);
+  const [remoteUid, setRemoteUid] = useState<number | null>(AgoraService.getRemoteUid());
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(callSession?.type === 'video');
-  const [isSpeakerOn, setIsSpeakerOn] = useState(callSession?.type === 'video'); // Default: Speaker for video, Earpiece for audio
+  const [isSpeakerOn, setIsSpeakerOn] = useState(callSession?.type === 'video');
   const [isCameraFront, setIsCameraFront] = useState(true);
-  const [callDuration, setCallDuration] = useState(0);
+  const [callDuration, setCallDuration] = useState(AgoraService.getElapsedDuration());
+  const [isInPipMode, setIsInPipMode] = useState(false);
+
+  // Draggable PIP mini-screen PanResponder
+  const panPip = useRef(new Animated.ValueXY({ x: INITIAL_PIP_X, y: INITIAL_PIP_Y })).current;
+  const panPipOffset = useRef({ x: INITIAL_PIP_X, y: INITIAL_PIP_Y });
+
+  const pipPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 3 || Math.abs(gs.dy) > 3,
+      onPanResponderGrant: () => {
+        panPip.setOffset(panPipOffset.current);
+        panPip.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event([null, { dx: panPip.x, dy: panPip.y }], {
+        useNativeDriver: false,
+      }),
+      onPanResponderRelease: (_, gs) => {
+        panPip.flattenOffset();
+        const clampX = Math.max(10, Math.min(width - PIP_W - 10, panPipOffset.current.x + gs.dx));
+        const clampY = Math.max(
+          Platform.OS === 'android' ? 24 : 44,
+          Math.min(height - PIP_H - 170, panPipOffset.current.y + gs.dy),
+        );
+        panPipOffset.current = { x: clampX, y: clampY };
+        Animated.spring(panPip, {
+          toValue: { x: clampX, y: clampY },
+          useNativeDriver: false,
+          tension: 90,
+          friction: 12,
+        }).start();
+      },
+    })
+  ).current;
 
   // Ensure we use the correct ID property
   const userId = user?.id || (user as any)?._id || (user as any)?.uid || '';
-
-  // Identify who the "other" person is
   const isCaller = callSession?.caller.id === userId;
   const otherPerson = isCaller ? callSession?.receiver : callSession?.caller;
-
   const localUid = getNumericUid(userId);
 
-  // 1. Timer Logic
+  // 1. Timer Logic - mathematically accurate and continuous
   useEffect(() => {
     let interval: any;
-    if (remoteUid) {
+    const isConnected = !!remoteUid || !!AgoraService.getRemoteUid() || callSession?.status === 'ACTIVE' || AgoraService.getConnectedAt() !== null;
+    if (isConnected) {
+      if (!AgoraService.getConnectedAt()) {
+        AgoraService.setConnectedAt(Date.now());
+      }
+      setCallDuration(AgoraService.getElapsedDuration());
       interval = setInterval(() => {
-        setCallDuration(prev => prev + 1);
+        setCallDuration(AgoraService.getElapsedDuration());
       }, 1000);
     } else {
       setCallDuration(0);
     }
     return () => clearInterval(interval);
-  }, [remoteUid]);
+  }, [remoteUid, callSession?.status]);
 
   const formatDuration = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
@@ -116,11 +162,11 @@ const ActiveCallScreen = () => {
       engine.current.playEffect(
         RINGBACK_ID,
         RINGBACK_URL,
-        -1, // Loop indefinitely
-        1,  // Pitch
-        0,  // Pan
-        60, // Volume (0-100)
-        true // Publish to remote
+        -1,
+        1,
+        0,
+        60,
+        true
       );
       isRingbackPlaying.current = true;
     }
@@ -137,7 +183,6 @@ const ActiveCallScreen = () => {
   // 2. Fetch Token
   useEffect(() => {
     const fetchToken = async () => {
-      // WAIT for localUid to be ready (non-zero) before fetching token and joining
       if (!callSession || !callSession.channelName || !localUid) return;
 
       try {
@@ -163,7 +208,7 @@ const ActiveCallScreen = () => {
     fetchToken();
   }, [callSession?.callId, callSession?.channelName, localUid]);
 
-  // 2. Request Permissions
+  // Request Permissions
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       await request(PERMISSIONS.ANDROID.RECORD_AUDIO);
@@ -178,7 +223,58 @@ const ActiveCallScreen = () => {
     }
   };
 
-  // 3. Initialize Agora Engine (Only ONCE)
+  const handleHangup = useCallback(() => {
+    if (hasExited.current) return;
+    hasExited.current = true;
+
+    console.log('📞 [ActiveCallScreen] Hanging up and exiting...');
+    stopRingback();
+    AgoraService.leaveAndRelease();
+    endCall();
+
+    setTimeout(() => {
+      goBack();
+    }, 100);
+  }, [endCall, stopRingback]);
+
+  const handleMinimize = useCallback(() => {
+    setIsMinimized(true);
+    goBack();
+  }, [setIsMinimized]);
+
+  // Intercept Android Hardware Back Button to Minimize
+  useEffect(() => {
+    const backAction = () => {
+      handleMinimize();
+      return true;
+    };
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+    return () => backHandler.remove();
+  }, [handleMinimize]);
+
+  // System-level Picture-in-Picture (OS PiP) Mode Setup
+  useEffect(() => {
+    const isVideo = callSession?.type === 'video';
+    const isConnected = !!remoteUid || !!AgoraService.getRemoteUid() || callSession?.status === 'ACTIVE';
+
+    if (isVideo && isConnected) {
+      PipService.setAutoPip(true);
+    } else {
+      PipService.setAutoPip(false);
+    }
+
+    const unsubscribe = PipService.addPipListener((inPip) => {
+      console.log('🖼️ [ActiveCallScreen] PiP Mode Changed:', inPip);
+      setIsInPipMode(inPip);
+    });
+
+    return () => {
+      PipService.setAutoPip(false);
+      unsubscribe();
+    };
+  }, [callSession?.type, callSession?.status, remoteUid]);
+
+  // 3. Initialize Agora Engine
   useEffect(() => {
     let setupEngine = async () => {
       try {
@@ -189,49 +285,64 @@ const ActiveCallScreen = () => {
         console.log('🏗️ [Agora] Initializing Engine...');
         const isVideoCall = callSession?.type === 'video';
         await requestPermissions();
-        engine.current = createAgoraRtcEngine();
-        engine.current.initialize({ appId: appId });
+
+        let rtcEngine = AgoraService.getEngine();
+        if (!rtcEngine) {
+          rtcEngine = AgoraService.getOrCreateEngine();
+          rtcEngine.initialize({ appId: appId });
+        }
+        engine.current = rtcEngine;
 
         // Event Listeners (Agora v4)
         engine.current.registerEventHandler({
           onJoinChannelSuccess: (connection: RtcConnection, elapsed: number) => {
             console.log('✅ [Agora-Diag] Joined Success:', connection.channelId, 'UID:', connection.localUid);
             setIsJoined(true);
+            AgoraService.setIsJoined(true);
+            AgoraService.setCurrentChannel(connection.channelId || null);
 
-            // ✅ FIX: Speaker & video preview set AFTER joining to prevent audio routing reset
+            // Set initial speaker route
+            const initialSpeaker = isVideoCall;
+            engine.current?.setEnableSpeakerphone(initialSpeaker);
+            engine.current?.setDefaultAudioRouteToSpeakerphone(initialSpeaker);
+            setIsSpeakerOn(initialSpeaker);
+
             if (isVideoCall) {
-              engine.current?.setEnableSpeakerphone(true);
-              engine.current?.setDefaultAudioRouteToSpeakerphone(true);
               engine.current?.startPreview();
-
-              // 🔊 Force speaker ON via InCallManager on Android for video calls
-              if (Platform.OS === 'android') {
-                InCallManager.setSpeakerphoneOn(true);
-                InCallManager.setForceSpeakerphoneOn(true);
-              }
             }
-            if (Platform.OS === 'ios') {
-              InCallManager.setForceSpeakerphoneOn(isVideoCall);
+
+            if (Platform.OS === 'android') {
+              InCallManager.setSpeakerphoneOn(initialSpeaker);
+              InCallManager.setForceSpeakerphoneOn(initialSpeaker);
+            } else {
+              InCallManager.setForceSpeakerphoneOn(initialSpeaker);
             }
           },
           onUserJoined: (connection: RtcConnection, uid: number, elapsed: number) => {
             console.log('👤 [Agora-Diag] Remote User Joined:', uid);
             setRemoteUid(uid);
+            AgoraService.setRemoteUid(uid);
+            if (!AgoraService.getConnectedAt()) {
+              AgoraService.setConnectedAt(Date.now());
+            }
             stopRingback();
           },
-          onUserOffline: (connection: RtcConnection, remoteUid: number, reason: UserOfflineReasonType) => {
-            console.log('👋 [Agora-Diag] Remote User Offline | UID:', remoteUid, 'Code:', reason);
+          onUserOffline: (connection: RtcConnection, remoteUidVal: number, reason: UserOfflineReasonType) => {
+            console.log('👋 [Agora-Diag] Remote User Offline | UID:', remoteUidVal, 'Code:', reason);
             setRemoteUid(null);
+            AgoraService.setRemoteUid(null);
             handleHangup();
           },
           onLocalAudioStateChanged: (connection: RtcConnection, state: LocalAudioStreamState, error: LocalAudioStreamReason) => {
             console.log('🎤 [Agora-Diag] Local Audio State:', state, 'Error:', error);
           },
-          onRemoteAudioStateChanged: (connection: RtcConnection, remoteUid: number, state: RemoteAudioState, reason: RemoteAudioStateReason, elapsed: number) => {
-            console.log('🔊 [Agora-Diag] Remote Audio UID:', remoteUid, 'State:', state, 'Reason:', reason);
+          onRemoteAudioStateChanged: (connection: RtcConnection, remoteUidVal: number, state: RemoteAudioState, reason: RemoteAudioStateReason, elapsed: number) => {
+            console.log('🔊 [Agora-Diag] Remote Audio UID:', remoteUidVal, 'State:', state, 'Reason:', reason);
           },
           onAudioRoutingChanged: (routing: number) => {
             console.log('📡 [Agora-Diag] Routing Changed to:', routing);
+            // Routing: 3 = Speakerphone, 1 = Earpiece, 0 = Headset, 5 = Bluetooth
+            setIsSpeakerOn(routing === 3);
           },
           onAudioVolumeIndication: (connection: RtcConnection, speakers: AudioVolumeInfo[], speakerNumber: number, totalVolume: number) => {
             if (totalVolume > 5) {
@@ -246,14 +357,11 @@ const ActiveCallScreen = () => {
           }
         });
 
-        // 1. Hardware Trigger & Parameters (OpenSL is crucial for Android performance)
-        // ✅ Start InCallManager for both platforms on video calls for proper audio session
+        // Hardware Trigger & Parameters
         if (Platform.OS === 'ios') {
           InCallManager.start({ media: isVideoCall ? 'video' : 'audio' });
-        } else if (isVideoCall) {
-          // Android: Start InCallManager for video calls to properly claim audio focus
-          InCallManager.start({ media: 'video' });
-          InCallManager.setSpeakerphoneOn(true);
+        } else {
+          InCallManager.start({ media: isVideoCall ? 'video' : 'audio' });
         }
         await engine.current.setParameters('{"che.audio.opensl":true}');
         await engine.current.setParameters('{"che.audio.android.opensl":true}');
@@ -261,48 +369,30 @@ const ActiveCallScreen = () => {
         await engine.current.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
         await engine.current.enableAudio();
 
-        // ✅ FIX 1: AudioScenarioChatRoom for video calls.
-        // AudioScenarioMeeting applies aggressive noise cancellation that
-        // incorrectly classifies voice as noise ~1s after video starts, killing audio.
         await engine.current.setAudioProfile(
           AudioProfileType.AudioProfileSpeechStandard,
           isVideoCall
-            ? AudioScenarioType.AudioScenarioChatroom  // ✅ Safe for video
-            : AudioScenarioType.AudioScenarioMeeting   // ✅ Fine for audio-only
+            ? AudioScenarioType.AudioScenarioChatroom
+            : AudioScenarioType.AudioScenarioMeeting
         );
 
         console.log('✅ [Agora] Basic Modules Enabled');
 
-        // 🔊 Volume — video calls use max values (400), audio calls use moderate boost
-        // adjustRecordingSignalVolume: microphone gain  (0–400, default 100)
-        // adjustPlaybackSignalVolume: speaker/earpiece  (0–400, default 100)
         await engine.current.adjustRecordingSignalVolume(isVideoCall ? 200 : 150);
         await engine.current.adjustPlaybackSignalVolume(isVideoCall ? 400 : 150);
 
-        // ✅ FIX 2: DO NOT set speakerphone here before joining.
-        // enableVideo() resets OS audio routing. Speaker must be set in onJoinChannelSuccess.
-        // For audio calls only: earpiece is the default, no action needed here.
-
-        // ✅ FIX 3: Enable video module but do NOT startPreview() yet.
-        // startPreview() before joinChannel causes camera-audio thread conflicts.
-        // It is now called safely inside onJoinChannelSuccess.
         if (isVideoCall) {
           await engine.current.enableVideo();
-          // ⚠️ startPreview() moved to onJoinChannelSuccess
         }
 
-        // Manual Enable & Unmute
         await engine.current.enableLocalAudio(true);
         await engine.current.muteLocalAudioStream(false);
         await engine.current.muteAllRemoteAudioStreams(false);
-        // ✅ FIX 4: reportVad=false — VAD (Voice Activity Detection) can incorrectly
-        // suppress audio in video calls when camera noise triggers false silence detection.
         await engine.current.enableAudioVolumeIndication(250, 3, false);
 
         console.log(`✅ [Agora] Engine Ready and Parameters Set`);
         setIsEngineReady(true);
 
-        // Start ringback if we're the caller and engine is ready
         if (callSession?.status === 'OUTGOING') {
           playRingback();
         }
@@ -311,28 +401,21 @@ const ActiveCallScreen = () => {
       }
     };
 
-    if (appId && !engine.current) {
+    if (appId) {
       setupEngine();
     }
 
     return () => {
-      console.log('🧹 [Agora] Releasing Engine...');
-      if (engine.current) {
-        stopRingback();
-        engine.current.leaveChannel();
-        engine.current.release();
-        engine.current = null;
-        setIsJoined(false);
-        setIsEngineReady(false);
+      console.log('🧹 [ActiveCallScreen] Screen unmounted. HasExited:', hasExited.current);
+      stopRingback();
+      if (hasExited.current) {
+        AgoraService.leaveAndRelease();
       }
     };
-  }, [appId]); // Only depend on appId
+  }, [appId, handleHangup, playRingback, stopRingback]);
 
   useEffect(() => {
     const join = async () => {
-      // ✅ PRODUCTION FIX: On iOS, we need to be careful with audio readiness.
-      // If we are in the foreground, the context sets isAudioActivated manually.
-      // If we are coming from CallKeep (background), we wait for the OS callback.
       const isAudioReady = Platform.OS === 'android' ? true : isAudioActivated;
 
       if (isEngineReady && engine.current && token && appId && localUid && !isJoined && isAudioReady) {
@@ -357,31 +440,42 @@ const ActiveCallScreen = () => {
     };
 
     join();
-  }, [token, appId, isJoined, localUid, isEngineReady, callSession?.channelName, callSession?.type]);
+  }, [token, appId, isJoined, localUid, isEngineReady, callSession?.channelName, callSession?.type, isAudioActivated]);
 
   // 5. Control Handlers
   const toggleMute = () => {
     if (engine.current) {
-      engine.current.muteLocalAudioStream(!isMuted);
-      setIsMuted(!isMuted);
+      const nextMute = !isMuted;
+      engine.current.muteLocalAudioStream(nextMute);
+      setIsMuted(nextMute);
     }
   };
 
   const toggleVideo = () => {
     if (engine.current && callSession?.type === 'video') {
-      engine.current.muteLocalVideoStream(isVideoEnabled);
-      setIsVideoEnabled(!isVideoEnabled);
+      const nextVideoState = !isVideoEnabled;
+      engine.current.muteLocalVideoStream(!nextVideoState);
+      setIsVideoEnabled(nextVideoState);
     }
   };
 
-  const toggleSpeaker = () => {
+  const toggleSpeaker = useCallback(() => {
     const nextState = !isSpeakerOn;
-    InCallManager.setForceSpeakerphoneOn(nextState);
+    setIsSpeakerOn(nextState);
+
     if (engine.current) {
       engine.current.setEnableSpeakerphone(nextState);
+      engine.current.setDefaultAudioRouteToSpeakerphone(nextState);
     }
-    setIsSpeakerOn(nextState);
-  };
+
+    if (Platform.OS === 'android') {
+      InCallManager.setSpeakerphoneOn(nextState);
+      InCallManager.setForceSpeakerphoneOn(nextState);
+    } else {
+      InCallManager.setForceSpeakerphoneOn(nextState);
+    }
+    console.log('🔊 [ActiveCallScreen] Speakerphone set to:', nextState);
+  }, [isSpeakerOn]);
 
   const switchCamera = () => {
     if (engine.current && isVideoEnabled) {
@@ -389,25 +483,6 @@ const ActiveCallScreen = () => {
       setIsCameraFront(!isCameraFront);
     }
   };
-
-  const handleHangup = useCallback(() => {
-    if (hasExited.current) return;
-    hasExited.current = true;
-
-    console.log('📞 [ActiveCallScreen] Hanging up and exiting...');
-    stopRingback();
-    endCall();
-
-    // Smooth exit
-    setTimeout(() => {
-      goBack();
-    }, 100);
-  }, [endCall]);
-
-  const handleMinimize = useCallback(() => {
-    setIsMinimized(true);
-    goBack();
-  }, [setIsMinimized]);
 
   // Exit if call ends from context
   useEffect(() => {
@@ -436,22 +511,35 @@ const ActiveCallScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" />
+      {!isInPipMode && <StatusBar barStyle="light-content" />}
 
       {/* Minimize button — top-left overlay */}
-      <TouchableOpacity
-        style={styles.minimizeButton}
-        onPress={handleMinimize}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-      >
-        <Icon name="chevron-down" size={26} color="rgba(255,255,255,0.85)" />
-      </TouchableOpacity>
+      {!isInPipMode && (
+        <TouchableOpacity
+          style={styles.minimizeButton}
+          onPress={handleMinimize}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Icon name="chevron-down" size={26} color="rgba(255,255,255,0.85)" />
+        </TouchableOpacity>
+      )}
+
+      {/* Top Video Header Overlay with duration badge (Video calls) */}
+      {!isInPipMode && callSession.type === 'video' && (remoteUid || AgoraService.getRemoteUid()) && (
+        <View style={styles.videoTopHeader}>
+          <Text style={styles.videoPeerName}>{otherPerson?.name || 'In Call'}</Text>
+          <View style={styles.durationPill}>
+            <View style={styles.liveDot} />
+            <Text style={styles.videoDurationText}>{formatDuration(callDuration)}</Text>
+          </View>
+        </View>
+      )}
 
       {/* 1. Main View (Remote Video or Avatar) */}
       <View style={styles.videoGrid}>
-        {callSession.type === 'video' && remoteUid ? (
+        {callSession.type === 'video' && (remoteUid || AgoraService.getRemoteUid()) ? (
           <RtcSurfaceView
-            canvas={{ uid: remoteUid }}
+            canvas={{ uid: (remoteUid || AgoraService.getRemoteUid()) as number }}
             style={styles.fullVideo}
           />
         ) : (
@@ -468,67 +556,80 @@ const ActiveCallScreen = () => {
             </View>
             <Text style={styles.remoteName}>{otherPerson?.name || 'Connecting...'}</Text>
             <Text style={styles.callDuration}>
-              {remoteUid ? formatDuration(callDuration) : 'Ringing...'}
+              {(remoteUid || AgoraService.getRemoteUid() || callSession.status === 'ACTIVE' || AgoraService.getConnectedAt() !== null)
+                ? formatDuration(callDuration)
+                : 'Ringing...'}
             </Text>
           </View>
         )}
 
-        {/* 2. Local View (PIP) */}
-        {callSession.type === 'video' && isJoined && isVideoEnabled && (
-          <View style={styles.localVideoContainer}>
+        {/* 2. Draggable Local Video (PIP) - hidden in OS PiP mode to avoid occluding remote video */}
+        {!isInPipMode && callSession.type === 'video' && isJoined && isVideoEnabled && (
+          <Animated.View
+            style={[
+              styles.localVideoContainer,
+              { transform: panPip.getTranslateTransform() }
+            ]}
+            {...pipPanResponder.panHandlers}
+          >
             <RtcSurfaceView
-              canvas={{ uid: 0 }} // 0 for local
+              canvas={{ uid: 0 }}
               style={styles.localVideo}
               zOrderMediaOverlay={true}
             />
-          </View>
+          </Animated.View>
         )}
       </View>
 
       {/* 3. Control Bar */}
-      <View style={styles.controlsContainer}>
-        <LinearGradient
-          colors={['transparent', 'rgba(0,0,0,0.8)']}
-          style={styles.controlsGradient}
-        >
-          <View style={styles.controlsRow}>
-            {callSession.type === 'audio' && (
+      {!isInPipMode && (
+        <View style={styles.controlsContainer}>
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.85)']}
+            style={styles.controlsGradient}
+          >
+            <View style={styles.controlsRow}>
+              {/* Speaker Toggle Button (Available for BOTH Audio & Video calls) */}
               <TouchableOpacity
-                style={[styles.iconButton, !isSpeakerOn && styles.inactiveButton]}
+                style={[styles.iconButton, isSpeakerOn && styles.activeSpeakerButton]}
                 onPress={toggleSpeaker}
               >
-                <Icon name={isSpeakerOn ? "volume-high" : "volume-low"} size={28} color="white" />
+                <Icon name={isSpeakerOn ? "volume-high" : "volume-low"} size={26} color="white" />
               </TouchableOpacity>
-            )}
 
-            {callSession.type === 'video' && (
+              {/* Video Toggle Button (For Video Calls) */}
+              {callSession.type === 'video' && (
+                <TouchableOpacity
+                  style={[styles.iconButton, !isVideoEnabled && styles.inactiveButton]}
+                  onPress={toggleVideo}
+                >
+                  <Icon name={isVideoEnabled ? "video" : "video-off"} size={26} color="white" />
+                </TouchableOpacity>
+              )}
+
+              {/* Mute Microphone Button */}
               <TouchableOpacity
-                style={[styles.iconButton, !isVideoEnabled && styles.inactiveButton]}
-                onPress={toggleVideo}
+                style={[styles.iconButton, isMuted && styles.inactiveButton]}
+                onPress={toggleMute}
               >
-                <Icon name={isVideoEnabled ? "video" : "video-off"} size={28} color="white" />
+                <Icon name={isMuted ? "microphone-off" : "microphone"} size={26} color="white" />
               </TouchableOpacity>
-            )}
 
-            <TouchableOpacity
-              style={[styles.iconButton, isMuted && styles.inactiveButton]}
-              onPress={toggleMute}
-            >
-              <Icon name={isMuted ? "microphone-off" : "microphone"} size={28} color="white" />
-            </TouchableOpacity>
+              {/* Switch Camera Button (For Video Calls) */}
+              {callSession.type === 'video' && (
+                <TouchableOpacity style={styles.iconButton} onPress={switchCamera}>
+                  <Icon name="camera-flip" size={26} color="white" />
+                </TouchableOpacity>
+              )}
 
-            {callSession.type === 'video' && (
-              <TouchableOpacity style={styles.iconButton} onPress={switchCamera}>
-                <Icon name="camera-flip" size={28} color="white" />
+              {/* Hangup Call Button */}
+              <TouchableOpacity style={[styles.iconButton, styles.hangupButton]} onPress={handleHangup}>
+                <Icon name="phone-hangup" size={30} color="white" />
               </TouchableOpacity>
-            )}
-
-            <TouchableOpacity style={[styles.iconButton, styles.hangupButton]} onPress={handleHangup}>
-              <Icon name="phone-hangup" size={32} color="white" />
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
-      </View>
+            </View>
+          </LinearGradient>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
@@ -540,15 +641,58 @@ const styles = StyleSheet.create({
   },
   minimizeButton: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 12 : 0,
-    left: 16,
+    top: Platform.OS === 'android' ? 44 : 52,
+    left: 18,
     zIndex: 100,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  videoTopHeader: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? 44 : 52,
+    left: 70,
+    right: 70,
+    zIndex: 90,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoPeerName: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+    marginBottom: 4,
+  },
+  durationPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+    marginRight: 6,
+  },
+  videoDurationText: {
+    color: '#E0E7FF',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   loadingContainer: {
     flex: 1,
@@ -572,19 +716,18 @@ const styles = StyleSheet.create({
   },
   localVideoContainer: {
     position: 'absolute',
-    top: 20,
-    right: 20,
-    width: 120,
-    height: 180,
-    borderRadius: 15,
+    width: PIP_W,
+    height: PIP_H,
+    borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.3)',
-    elevation: 10,
+    borderColor: 'rgba(255,255,255,0.4)',
+    elevation: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 5,
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+    zIndex: 99,
   },
   localVideo: {
     flex: 1,
@@ -631,35 +774,38 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     width: '100%',
-    height: 150,
+    height: 140,
   },
   controlsGradient: {
     flex: 1,
     justifyContent: 'flex-end',
-    paddingBottom: 40,
+    paddingBottom: 36,
   },
   controlsRow: {
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
   iconButton: {
-    width: 55,
-    height: 55,
-    borderRadius: 28,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: 'rgba(255,255,255,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  activeSpeakerButton: {
+    backgroundColor: '#3B82F6',
+  },
   inactiveButton: {
-    backgroundColor: 'rgba(239, 68, 68, 0.5)',
+    backgroundColor: 'rgba(239, 68, 68, 0.6)',
   },
   hangupButton: {
     backgroundColor: '#EF4444',
-    width: 65,
-    height: 65,
-    borderRadius: 33,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
   },
 });
 

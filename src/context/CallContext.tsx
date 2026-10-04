@@ -14,6 +14,7 @@ import NotificationService from '../services/NotificationService';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { pendingCallActions, clearPendingCallActions } from '../services/CallActions';
+import AgoraService from '../services/AgoraService';
 
 const generateUUID = () => {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -70,6 +71,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
   const { user } = useProfile();
   const isProcessingActions = useRef(false);
   const activeCallIdRef = useRef<string | null>(null);
+  const activeCallUUIDRef = useRef<string | null>(null);
   const acceptedCallIds = useRef<Set<string>>(new Set()); // Guard against double signaling
   const pendingAcceptRef = useRef(false); // Guard against early CallKeep answer
   const lastTerminationTime = useRef<number>(0);
@@ -240,7 +242,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
   // Sync Ref with state
   useEffect(() => {
     activeCallIdRef.current = callSession?.callId || null;
-  }, [callSession?.callId]);
+    activeCallUUIDRef.current = callSession?.callUUID || null;
+  }, [callSession?.callId, callSession?.callUUID]);
 
   // Handlers for Socket Events
   useEffect(() => {
@@ -293,6 +296,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     // 2. Call Accepted (For Caller)
     socket.on('call:accepted', (data: { callId: string }) => {
       console.log('✅ [CallContext] Call accepted by receiver');
+      if (!AgoraService.getConnectedAt()) {
+        AgoraService.setConnectedAt(Date.now());
+      }
       setCallSession(prev => prev ? { ...prev, status: 'ACTIVE' } : null);
     });
 
@@ -316,9 +322,23 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
 
       lastTerminationTime.current = now;
       console.log(`🛑 [CallContext] Call ended/declined: ${data.reason || 'Terminated'}`);
-      if (callSession?.callUUID) {
-        CallKeepService.endCall(callSession.callUUID);
+      const uuidToEnd = activeCallUUIDRef.current || callSession?.callUUID;
+      if (uuidToEnd) {
+        CallKeepService.endCall(uuidToEnd);
       }
+
+      // Stop audio session
+      try {
+        const InCallManager = require('react-native-incall-manager').default;
+        if (InCallManager && typeof InCallManager.stop === 'function') {
+          InCallManager.stop();
+        }
+      } catch (e) {
+        console.warn('⚠️ [CallContext] InCallManager stop failed:', e);
+      }
+
+      // Release Agora Engine
+      AgoraService.leaveAndRelease();
 
       // Production fix: Clear lingering notifications
       NotificationService.getInstance().cancelAllCallNotifications();
@@ -502,6 +522,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     }
 
     // 3. Update local state
+    if (!AgoraService.getConnectedAt()) {
+      AgoraService.setConnectedAt(Date.now());
+    }
     setCallSession(prev => prev ? { ...prev, status: 'ACTIVE' } : null);
 
     // 4. 🔥 CRITICAL FOR iOS FOREGROUND: Since we bypassed CallKit UI, 
@@ -548,6 +571,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     } catch (e) {
       console.warn('⚠️ [CallContext] InCallManager stop failed:', e);
     }
+    AgoraService.leaveAndRelease();
     setIsAudioActivated(false);
     setCallSession(null);
   }, [socket, callSession]);
@@ -565,6 +589,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
     if (callSession.callUUID) {
       CallKeepService.endCall(callSession.callUUID);
     }
+    AgoraService.leaveAndRelease();
     setIsAudioActivated(false);
     setCallSession(null);
   }, [socket, callSession]);
@@ -606,6 +631,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({
       console.warn('⚠️ [CallContext] InCallManager stop failed:', e);
     }
 
+    AgoraService.leaveAndRelease();
     setIsAudioActivated(false);
     setCallSession(null);
   }, [socket, callSession, currentUserId, cancelCall, declineCall]);

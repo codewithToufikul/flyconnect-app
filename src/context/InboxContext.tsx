@@ -13,6 +13,8 @@ interface InboxContextType {
     refreshInbox: () => Promise<void>;
     updateConversationLocally: (conversationId: string, updates: any) => void;
     clearUnreadLocally: (conversationId: string) => void;
+    deleteConversationLocally: (conversationId: string) => void;
+    clearChatLocally: (conversationId: string) => void;
 }
 
 const InboxContext = createContext<InboxContextType | undefined>(undefined);
@@ -222,8 +224,41 @@ export const InboxProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
     }, [currentUser, calculateCounts]);
 
+    const deleteConversationLocally = useCallback((cid: string) => {
+        setConversations(prev => {
+            const updated = prev.filter(c => (c._id || c.id)?.toString() !== cid);
+            const { unread, missed } = calculateCounts(updated);
+            setTotalUnreadCount(unread);
+            setTotalMissedCallCount(missed);
+            StorageService.saveInbox(updated);
+            return updated;
+        });
+    }, [calculateCounts]);
+
+    const clearChatLocally = useCallback((cid: string) => {
+        setConversations(prev => {
+            const updated = prev.map(c => {
+                if ((c._id || c.id)?.toString() === cid) {
+                    return { ...c, lastMessage: null, lastMessageAt: new Date().toISOString() };
+                }
+                return c;
+            });
+            StorageService.saveInbox(updated);
+            return updated;
+        });
+    }, []);
+
     return (
-        <InboxContext.Provider value={{ conversations, totalUnreadCount, totalMissedCallCount, refreshInbox, updateConversationLocally, clearUnreadLocally }}>
+        <InboxContext.Provider value={{
+            conversations,
+            totalUnreadCount,
+            totalMissedCallCount,
+            refreshInbox,
+            updateConversationLocally,
+            clearUnreadLocally,
+            deleteConversationLocally,
+            clearChatLocally
+        }}>
             {children}
         </InboxContext.Provider>
     );

@@ -14,7 +14,7 @@ const PRODUCTION_URL = 'https://connect.flybook.com.bd';
 
 // For local development - automatically detects platform
 const LOCAL_URL = Platform.select({
-  android: 'http://10.0.2.2:10000',
+  android: 'http://192.168.0.191:10000',
   ios: 'http://localhost:10000',
   default: 'http://localhost:10000',
 });
@@ -139,8 +139,20 @@ export const unblockUserAPI = async (userId: string) => {
   return post(`/api/v1/users/unblock/${userId}`);
 };
 
-export const getBlockedUsersAPI = async () => {
-  return get('/api/v1/users/me/blocks');
+export const deleteMessageAPI = async (messageId: string, deleteForEveryone: boolean = false) => {
+  return post('/api/v1/chats/messages/delete', { messageId, deleteForEveryone });
+};
+
+export const deleteMultipleMessagesAPI = async (messageIds: string[], deleteForEveryone: boolean = false) => {
+  return post('/api/v1/chats/messages/delete-bulk', { messageIds, deleteForEveryone });
+};
+
+export const clearChatAPI = async (conversationId: string) => {
+  return post('/api/v1/chats/clear', { conversationId });
+};
+
+export const deleteConversationAPI = async (conversationId: string) => {
+  return post('/api/v1/chats/delete-conversation', { conversationId });
 };
 
 export const get = async <T = any>(url: string, config?: any): Promise<T> => {
@@ -157,4 +169,10 @@ export const post = async <T = any>(
   return response.data;
 };
 
+export const del = async <T = any>(url: string, config?: any): Promise<T> => {
+  const response = await apiClient.delete<T>(url, config);
+  return response.data;
+};
+
 export default apiClient;
+

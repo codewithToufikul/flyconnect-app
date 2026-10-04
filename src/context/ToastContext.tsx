@@ -6,7 +6,7 @@ export interface ToastMessage {
   senderName: string;
   senderImage?: string;
   message: string;
-  conversationId: string;
+  conversationId?: string;
   contentType?: string;
 }
 
